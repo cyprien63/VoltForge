@@ -10,6 +10,7 @@ Indépendant de Qt.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, Optional, Tuple
 
 from .components import snap
@@ -25,9 +26,12 @@ class VoltageArrow:
         self.label = label or ""
         self.node_a: Optional[int] = None
         self.node_b: Optional[int] = None
+        self.node_a_name = "A"
+        self.node_b_name = "B"
+        self._automatic_label = not bool(label)
         if circuit is not None:
             self.resolve_nodes(circuit)
-        if not self.label:
+        if self._automatic_label:
             self.label = self._auto_label()
 
     # -- identité ----------------------------------------------------------
@@ -36,7 +40,7 @@ class VoltageArrow:
         return self.label
 
     def _auto_label(self) -> str:
-        return f"U{self.node_a if self.node_a else 'a'}_{self.node_b if self.node_b else 'b'}"
+        return f"U{self.node_a_name.lower()}{self.node_b_name.lower()}"
 
     def auto_rename(self) -> None:
         """Renomme selon les nœuds résolus (U_1_2 si connu)."""
@@ -47,6 +51,12 @@ class VoltageArrow:
         """Appelé par ``Circuit.recompute_nodes`` à chaque changement."""
         self.node_a = circuit.node_id_at(self.start[0], self.start[1], radius=12.0)
         self.node_b = circuit.node_id_at(self.end[0], self.end[1], radius=12.0)
+        if self.node_a in circuit.nodes:
+            self.node_a_name = circuit.nodes[self.node_a].name.lower()
+        if self.node_b in circuit.nodes:
+            self.node_b_name = circuit.nodes[self.node_b].name.lower()
+        if self._automatic_label:
+            self.label = self._auto_label()
 
     # -- déplacement -------------------------------------------------------
     def move_by(self, dx: float, dy: float) -> None:
@@ -84,11 +94,19 @@ class VoltageArrow:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "label": self.label,
+            "automatic_label": self._automatic_label,
             "start": list(self.start),
             "end": list(self.end),
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "VoltageArrow":
-        a = cls(tuple(data["start"]), tuple(data["end"]), label=data.get("label"))
+        label = data.get("label")
+        automatic = data.get("automatic_label")
+        if automatic is None:
+            automatic = not label or bool(re.fullmatch(r"U_[0-9]+_[0-9]+", label))
+        a = cls(
+            tuple(data["start"]), tuple(data["end"]),
+            label=None if automatic else label,
+        )
         return a

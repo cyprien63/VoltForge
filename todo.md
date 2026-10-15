@@ -18,8 +18,27 @@
   des composants ; les fils connectés suivent les bornes.
 - [x] Sélection et déplacement d'un fil entier, déplacement de ses extrémités,
   suppression par `Delete` ou menu contextuel.
+- [x] Routage orthogonal des fils ; l'outil reste actif et permet de tracer des
+  fils successifs depuis le dernier point. Clic droit ou `Échap` termine le
+  tracé en cours.
+- [x] Normalisation orthogonale des fils après chaque déplacement ou édition,
+  ainsi que conversion écran/scène correcte quand le canevas est zoomé.
+- [x] Repère circulaire vert au survol d'une borne ou d'un fil ; les extrémités
+  s'y accrochent également pendant le dessin et le déplacement.
+- [x] Flèche de tension visible au-dessus du schéma, avec aperçu avant pose,
+  points de départ/arrivée et sélection facilitée.
+- [x] Bouton explicite pour ouvrir/fermer l'interrupteur sélectionné ; le
+  double-clic et le solveur mettent à jour son état électrique.
 - [x] Jonctions automatiques aux croisements de fils et aux bornes situées sur
   un segment.
+- [x] Nœuds automatiquement nommés A, B, C… avec renommage manuel persistant.
+- [x] Flèches de tension nommées automatiquement `Uab`, personnalisables à la
+  création et supprimables individuellement.
+- [x] Calcul et mise en évidence des mailles indépendantes, activables avec
+  l'affichage des nœuds depuis le menu **Affichage**.
+- [x] Simulation utilisateur sans saisie de code : formulaire de durée,
+  cadence, pas de calcul et liste d'événements paramétrés.
+- [x] Calculateur de loi d'Ohm pour déterminer U, I, R et P depuis deux valeurs.
 - [x] Zoom à la molette et déplacement de la vue au bouton milieu.
 - [x] Export GIF jusqu'au dernier événement du scénario, avec durée totale
   calculée depuis le programme, et restauration de l'état du circuit.
@@ -32,3 +51,30 @@
 - [ ] Ajouter des courbes temporelles interactives pour les mesures.
 - [ ] Permettre de définir des composants personnalisés à plusieurs broches et
   des sous-circuits, au-delà du modèle résistif à deux bornes.
+- [ ] Ajouter un routeur de fils qui évite automatiquement les composants et
+  minimise les croisements, avec choix du coude horizontal/vertical.
+- [ ] Ajouter un éditeur graphique de symboles et un panneau de réglages
+  rapide sans ouvrir les propriétés complètes.
+- [ ] Ajouter une bibliothèque de circuits et de sous-circuits réutilisables.
+- [ ] Ajouter des analyses AC/fréquentielles, balayage de paramètres et
+  estimation de tolérances.
+- [ ] Ajouter une légende/export des noms de nœuds, courants et valeurs de
+  mesure dans les documents statiques.
+- [ ] Ajouter des contrôles de lecture/pause/pas à pas et des signaux
+  temporels synchronisés avec la simulation.
+- [ ] Ajouter une option pour sélectionner le coude préféré d'un fil, et
+  afficher une alerte de collision lorsqu'un tracé traverse un composant.
+- [ ] Ajouter un outil « couper / prolonger » un fil et la sélection multiple
+  pour déplacer ou supprimer plusieurs éléments ensemble.
+- [ ] Ajouter des points de jonction déplaçables et des ponts visuels pour
+  distinguer les croisements non connectés.
+- [ ] Ajouter une comparaison côte à côte des résultats avant/après une
+  modification de composant.
+- [ ] Ajouter des profils de composants (valeurs normalisées E12/E24,
+  puissances nominales et modèles de composants courants).
+- [ ] Ajouter des contrôles de vérification du circuit : bornes flottantes,
+  boucle sans source, court-circuit et fils qui se chevauchent.
+- [ ] Ajouter un mode présentation qui masque la grille et exporte un schéma
+  annoté avec nomenclature et tableau des valeurs.
+- [ ] Ajouter des raccourcis configurables et une recherche rapide d'outils,
+  composants et commandes.

@@ -78,6 +78,7 @@ class CircuitNode:
     id: int
     x: int
     y: int
+    name: str = ""
     is_ground: bool = False
     voltage: float = 0.0
     degree: int = 0          # nombre de segments/connexions incidents au nœud
@@ -102,6 +103,7 @@ class Circuit:
         self.wires: List[Wire] = []
         self.arrows: List[Any] = []          # core.voltage_arrow.VoltageArrow
         self.nodes: Dict[int, CircuitNode] = {}
+        self.node_name_overrides: Dict[Point, str] = {}
         self.ground_id: Optional[int] = None
         self._next_uid = 1
 
@@ -140,6 +142,10 @@ class Circuit:
         """Supprime un composant/fil, les fils orphelins et les flèches."""
         target = self.get(label)
         if target is None:
+            arrow = next((item for item in self.arrows if item.label == label), None)
+            if arrow is not None:
+                self.arrows.remove(arrow)
+                self.recompute_nodes()
             return
         if isinstance(target, Wire):
             self.wires.remove(target)
@@ -160,6 +166,7 @@ class Circuit:
         self.components.clear()
         self.wires.clear()
         self.arrows.clear()
+        self.node_name_overrides.clear()
         self.recompute_nodes()
 
     def _split_wires_at_junctions(self) -> None:
@@ -296,8 +303,13 @@ class Circuit:
         for root, nid in root_to_id.items():
             members = groups[root]
             junctions = [p for p in members if local_degree.get(p, 0) >= 3]
+            name = next(
+                (self.node_name_overrides[p] for p in members
+                 if p in self.node_name_overrides),
+                self._node_name(nid - 1),
+            )
             self.nodes[nid] = CircuitNode(
-                id=nid, x=root[0], y=root[1],
+                id=nid, x=root[0], y=root[1], name=name,
                 degree=max((local_degree.get(p, 0) for p in members), default=0),
                 points=sorted(members, key=lambda p: (p[1], p[0])),
                 junction_coords=sorted(junctions, key=lambda p: (p[1], p[0])),
@@ -333,6 +345,35 @@ class Circuit:
         for arrow in self.arrows:
             arrow.resolve_nodes(self)
 
+    @staticmethod
+    def _node_name(index: int) -> str:
+        """Return spreadsheet-like node names: A..Z, AA..AZ, and so on."""
+        name = ""
+        while index >= 0:
+            index, remainder = divmod(index, 26)
+            name = chr(ord("A") + remainder) + name
+            index -= 1
+        return name
+
+    def rename_node(self, node_id: int, name: str) -> None:
+        node = self.nodes.get(node_id)
+        normalized = name.strip()
+        if node is None or not normalized:
+            raise ValueError("Le nom du nœud ne peut pas être vide.")
+        if any(
+            other.id != node_id and other.name.casefold() == normalized.casefold()
+            for other in self.nodes.values()
+        ):
+            raise ValueError(f"Le nom de nœud {normalized!r} est déjà utilisé.")
+        for point in node.points:
+            self.node_name_overrides[point] = normalized
+        node.name = normalized
+
+    def remove_arrow(self, arrow: Any) -> None:
+        if arrow in self.arrows:
+            self.arrows.remove(arrow)
+            self.recompute_nodes()
+
     # -- requêtes ----------------------------------------------------------
     def degree(self, node_id: Optional[int]) -> int:
         node = self.nodes.get(node_id) if node_id is not None else None
@@ -342,9 +383,10 @@ class Circuit:
         """Nœud le plus proche de (x, y) dans un rayon donné (sinon None)."""
         best, best_d = None, radius * radius
         for nid, node in self.nodes.items():
-            d = (node.x - x) ** 2 + (node.y - y) ** 2
-            if d <= best_d:
-                best, best_d = nid, d
+            for px, py in node.points or [(node.x, node.y)]:
+                d = (px - x) ** 2 + (py - y) ** 2
+                if d <= best_d:
+                    best, best_d = nid, d
         return best
 
     def junction_points(self) -> List[Tuple[int, int]]:
@@ -361,13 +403,64 @@ class Circuit:
     def is_complete(self) -> bool:
         return any(isinstance(c, Generator) for c in self.components)
 
-    # -- mailles (boucles indépendantes, formule d'Euler) -------------------
+    # -- mailles (base des cycles indépendants du graphe des branches) -------
     def mesh_count(self) -> int:
-        n_edges = len(self.branches())
-        n_nodes = len(self.nodes)
-        if n_edges == 0 or n_nodes == 0:
-            return 0
-        return max(0, n_edges - n_nodes + 1)
+        return len(self.meshes())
+
+    def meshes(self) -> List[List[Component]]:
+        """Return a fundamental cycle basis for the circuit's branch graph."""
+        branches = [
+            component for component in self.branches()
+            if component.node_p is not None and component.node_n is not None
+        ]
+        adjacency: Dict[int, List[Tuple[int, int]]] = {}
+        for edge_index, component in enumerate(branches):
+            a, b = component.node_p, component.node_n
+            adjacency.setdefault(a, []).append((b, edge_index))
+            adjacency.setdefault(b, []).append((a, edge_index))
+
+        tree_edges: set[int] = set()
+        visited: set[int] = set()
+        parent: Dict[int, Tuple[Optional[int], Optional[int]]] = {}
+        for start in adjacency:
+            if start in visited:
+                continue
+            visited.add(start)
+            parent[start] = (None, None)
+            stack = [start]
+            while stack:
+                node = stack.pop()
+                for neighbor, edge_index in adjacency[node]:
+                    if edge_index in tree_edges:
+                        continue
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        parent[neighbor] = (node, edge_index)
+                        tree_edges.add(edge_index)
+                        stack.append(neighbor)
+
+        meshes: List[List[Component]] = []
+        for edge_index, component in enumerate(branches):
+            if edge_index in tree_edges:
+                continue
+            start, end = component.node_p, component.node_n
+            ancestors: Dict[int, List[int]] = {}
+            node, path = start, []
+            while node is not None:
+                ancestors[node] = list(path)
+                parent_node, parent_edge = parent[node]
+                if parent_edge is not None:
+                    path.append(parent_edge)
+                node = parent_node
+            node, end_path = end, []
+            while node not in ancestors:
+                parent_node, parent_edge = parent[node]
+                if parent_edge is not None:
+                    end_path.append(parent_edge)
+                node = parent_node
+            cycle_edges = ancestors[node] + end_path + [edge_index]
+            meshes.append([branches[index] for index in cycle_edges])
+        return meshes
 
     # -- sérialisation -----------------------------------------------------
     def to_dict(self, scenario_text: str = "") -> Dict[str, Any]:
@@ -376,6 +469,10 @@ class Circuit:
             "components": [component_to_dict(c) for c in self.components],
             "wires": [Wire.to_dict(w) for w in self.wires],
             "arrows": [a.to_dict() for a in self.arrows],
+            "node_labels": [
+                {"point": list(point), "name": name}
+                for point, name in self.node_name_overrides.items()
+            ],
             "scenario": scenario_text,
         }
 
@@ -389,5 +486,9 @@ class Circuit:
         from .voltage_arrow import VoltageArrow
         for ad in data.get("arrows", []):
             circuit.arrows.append(VoltageArrow.from_dict(ad))
+        circuit.node_name_overrides = {
+            tuple(item["point"]): item["name"]
+            for item in data.get("node_labels", [])
+        }
         circuit.recompute_nodes()
         return circuit

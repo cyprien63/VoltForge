@@ -26,19 +26,25 @@ from PyQt6.QtWidgets import (
     QProgressDialog,
     QPushButton,
     QPlainTextEdit,
+    QSpinBox,
     QScrollArea,
     QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from core.circuit import Circuit
-from core.components import Component, Kind, Motor, create_component
+from core.components import Component, Kind, Motor, Switch, create_component
 from core.simulation import SimulationEngine
 from exporters.gif import export_gif
 from exporters.static import export_static
 from ui.canvas import CircuitCanvas
+from core.formatting import parse_value
+from core.voltage_arrow import VoltageArrow
+from core.scenario import PROP_ALIASES
 
 
 class PropertyDialog(QDialog):
@@ -120,6 +126,70 @@ class CustomComponentDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
+
+
+class OhmCalculatorDialog(QDialog):
+    """Calculate the four basic electrical quantities from any two values."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Calculateur — loi d'Ohm")
+        form = QFormLayout(self)
+        self.fields = {}
+        for key, label, unit in (
+            ("u", "Tension U", "V"),
+            ("i", "Courant I", "A"),
+            ("r", "Résistance R", "Ω"),
+            ("p", "Puissance P", "W"),
+        ):
+            field = QLineEdit()
+            field.setPlaceholderText(f"Laisser vide pour calculer ({unit})")
+            self.fields[key] = field
+            form.addRow(label, field)
+        self.result = QLabel("Formules : U = R × I · P = U × I")
+        self.result.setWordWrap(True)
+        form.addRow(self.result)
+        calculate = QPushButton("Calculer")
+        calculate.clicked.connect(self.calculate)
+        form.addRow(calculate)
+
+    def calculate(self) -> None:
+        values = {}
+        try:
+            for key, field in self.fields.items():
+                raw = field.text().strip()
+                values[key] = parse_value(raw) if raw else None
+            known = [key for key, value in values.items() if value is not None]
+            if len(known) != 2:
+                raise ValueError("Renseignez exactement deux grandeurs.")
+            u, i, r, p = (values[key] for key in ("u", "i", "r", "p"))
+            if u is not None and i is not None:
+                r, p = u / i if i else None, u * i
+            elif u is not None and r is not None:
+                i, p = u / r if r else None, u * (u / r) if r else None
+            elif u is not None and p is not None:
+                i = p / u if u else None
+                r = u / i if i else None
+            elif i is not None and r is not None:
+                u, p = r * i, r * i * i
+            elif i is not None and p is not None:
+                u = p / i if i else None
+                r = u / i if i else None
+            else:
+                if r is None or p is None or r <= 0 or p < 0:
+                    raise ValueError("R doit être positive et P non négative.")
+                i = (p / r) ** 0.5
+                u = i * r
+            if any(value is None for value in (u, i, r, p)):
+                raise ValueError("Le calcul est impossible avec une valeur nulle.")
+            for key, value in zip(("u", "i", "r", "p"), (u, i, r, p)):
+                self.fields[key].setText(f"{value:.6g}")
+            self.result.setText(
+                f"U = {u:.6g} V · I = {i:.6g} A · "
+                f"R = {r:.6g} Ω · P = {p:.6g} W"
+            )
+        except (ValueError, ZeroDivisionError) as exc:
+            self.result.setText(str(exc))
 
 
 class MainWindow(QMainWindow):
@@ -213,9 +283,20 @@ class MainWindow(QMainWindow):
         self._add_action(file_menu, "Quitter", self.close, QKeySequence.StandardKey.Quit)
 
         simulation_menu = self.menuBar().addMenu("Simulation")
-        self._add_action(simulation_menu, "Scénario…", self.open_scenario_dialog)
+        self._add_action(simulation_menu, "Configurer / lancer…", self.open_scenario_dialog)
         self._add_action(simulation_menu, "Exporter un GIF…", self.open_scenario_dialog)
         self._add_action(simulation_menu, "Recalculer", self.recompute)
+        tools_menu = self.menuBar().addMenu("Outils")
+        self._add_action(tools_menu, "Calculateur loi d'Ohm…", self.open_ohm_calculator)
+        view_menu = self.menuBar().addMenu("Affichage")
+        self.node_labels_action = QAction("Afficher les nœuds A, B, C…", self)
+        self.node_labels_action.setCheckable(True)
+        self.node_labels_action.toggled.connect(self._toggle_node_labels)
+        view_menu.addAction(self.node_labels_action)
+        self.meshes_action = QAction("Afficher les mailles M1, M2…", self)
+        self.meshes_action.setCheckable(True)
+        self.meshes_action.toggled.connect(self._toggle_meshes)
+        view_menu.addAction(self.meshes_action)
 
     @staticmethod
     def _add_action(menu, text, callback, shortcut=None):
@@ -322,6 +403,10 @@ class MainWindow(QMainWindow):
         for button in (self.edit_button, self.rotate_button, self.delete_button):
             selection_buttons.addWidget(button)
         self.selection_layout.addLayout(selection_buttons)
+        self.switch_button = QPushButton()
+        self.switch_button.clicked.connect(self.toggle_selected_switch)
+        self.switch_button.hide()
+        self.selection_layout.addWidget(self.switch_button)
         right_layout.addWidget(self.selection_group)
 
         self.results_group = QGroupBox("Résultats MNA")
@@ -341,8 +426,22 @@ class MainWindow(QMainWindow):
         simulation_toolbar = self.addToolBar("Simulation")
         simulation_toolbar.setMovable(False)
         self._toolbar_action(
-            simulation_toolbar, "Scénario / GIF…", self.open_scenario_dialog
+            simulation_toolbar, "Simulation…", self.open_scenario_dialog
         )
+        self._toolbar_action(
+            simulation_toolbar, "Calculateur U/I/R/P", self.open_ohm_calculator
+        )
+
+    def _toggle_node_labels(self, enabled: bool) -> None:
+        self.canvas.show_node_labels = enabled
+        self.canvas.update()
+
+    def _toggle_meshes(self, enabled: bool) -> None:
+        self.canvas.show_meshes = enabled
+        self.canvas.update()
+
+    def open_ohm_calculator(self) -> None:
+        OhmCalculatorDialog(self).exec()
 
     @staticmethod
     def _icon_path(filename: str) -> Path:
@@ -383,6 +482,7 @@ class MainWindow(QMainWindow):
             self.edit_button.setEnabled(False)
             self.rotate_button.setEnabled(False)
             self.delete_button.setEnabled(False)
+            self.switch_button.hide()
             return
         if isinstance(item, Component):
             result = self.engine.solution.branches.get(item.label)
@@ -393,12 +493,38 @@ class MainWindow(QMainWindow):
                     detail += f"\n{result.message}"
                 if isinstance(item, Motor):
                     detail += f"\nVitesse = {item.rpm(result.i):.0f} tr/min"
+        elif isinstance(item, VoltageArrow):
+            item.resolve_nodes(self.circuit)
+            value = item.voltage(self.engine.solution)
+            detail = f"{item.label}\nFlèche de tension orientée A → B"
+            if item.node_a in self.circuit.nodes:
+                detail += f"\nNœud de départ : {self.circuit.nodes[item.node_a].name}"
+            if item.node_b in self.circuit.nodes:
+                detail += f"\nNœud d'arrivée : {self.circuit.nodes[item.node_b].name}"
+            if value is not None:
+                detail += f"\nTension : {value:.5g} V"
         else:
             detail = f"Fil {getattr(item, 'label', '')}"
         self.selection_label.setText(detail)
         self.edit_button.setEnabled(isinstance(item, Component))
         self.rotate_button.setEnabled(isinstance(item, Component))
         self.delete_button.setEnabled(True)
+        if isinstance(item, Switch):
+            self.switch_button.setText(
+                "Ouvrir l'interrupteur" if item.closed
+                else "Fermer l'interrupteur"
+            )
+            self.switch_button.show()
+        else:
+            self.switch_button.hide()
+
+    def toggle_selected_switch(self) -> None:
+        item = self.canvas.selected
+        if not isinstance(item, Switch):
+            return
+        item.closed = not item.closed
+        self.engine.recompute()
+        self._circuit_changed()
 
     def refresh_results(self) -> None:
         solution = self.engine.solution
@@ -472,7 +598,10 @@ class MainWindow(QMainWindow):
     def delete_selected(self) -> None:
         item = self.canvas.selected
         if item is not None:
-            self.circuit.remove(getattr(item, "label", ""))
+            if isinstance(item, VoltageArrow):
+                self.circuit.remove_arrow(item)
+            else:
+                self.circuit.remove(getattr(item, "label", ""))
             self.canvas.set_selection(None)
             self.engine.recompute()
             self._circuit_changed()
@@ -561,6 +690,255 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Export impossible", str(exc))
 
     def open_scenario_dialog(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Simulation pas à pas")
+        dialog.resize(780, 520)
+        layout = QVBoxLayout(dialog)
+        info = QLabel(
+            "Réglez les paramètres, puis ajoutez les changements souhaités. "
+            "Aucun code de scénario à saisir."
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        settings = QFormLayout()
+        duration = QDoubleSpinBox()
+        duration.setRange(0.1, 600)
+        duration.setDecimals(2)
+        duration.setValue(3)
+        duration.setSuffix(" s")
+        fps = QSpinBox()
+        fps.setRange(1, 60)
+        fps.setValue(15)
+        step = QDoubleSpinBox()
+        step.setRange(0.1, 1000)
+        step.setDecimals(1)
+        step.setValue(5)
+        step.setSuffix(" ms")
+        settings.addRow("Durée", duration)
+        settings.addRow("Images par seconde", fps)
+        settings.addRow("Pas de calcul", step)
+        layout.addLayout(settings)
+
+        table = QTableWidget(0, 4)
+        table.setHorizontalHeaderLabels(
+            ["Temps (s)", "Composant", "Paramètre", "Nouvelle valeur"]
+        )
+        table.horizontalHeader().setStretchLastSection(True)
+        table.setMinimumHeight(220)
+        layout.addWidget(table, 1)
+        row_buttons = QHBoxLayout()
+        add_button = QPushButton("Ajouter un changement")
+        remove_button = QPushButton("Retirer la ligne")
+        row_buttons.addWidget(add_button)
+        row_buttons.addWidget(remove_button)
+        row_buttons.addStretch(1)
+        layout.addLayout(row_buttons)
+
+        supported_properties = set(PROP_ALIASES.values())
+        property_labels = {
+            "voltage": "Tension",
+            "current": "Courant",
+            "ri": "Résistance interne",
+            "resistance": "Résistance",
+            "closed": "Interrupteur fermé",
+            "r_on": "Résistance (fermé)",
+            "r_off": "Résistance (ouvert)",
+            "capacitance": "Capacité",
+            "v0": "Tension initiale",
+            "inductance": "Inductance",
+            "r_w": "Résistance de bobine",
+            "p_max": "Puissance maximale",
+        }
+
+        def add_event_row() -> None:
+            if not self.circuit.components:
+                QMessageBox.information(
+                    dialog, "Aucun composant",
+                    "Placez un composant avant de configurer un événement.",
+                )
+                return
+            row = table.rowCount()
+            table.insertRow(row)
+            time_editor = QDoubleSpinBox()
+            time_editor.setRange(0, 600)
+            time_editor.setDecimals(3)
+            time_editor.setSingleStep(0.1)
+            time_editor.setValue(min(0.5, duration.value()))
+            table.setCellWidget(row, 0, time_editor)
+            target_editor = QComboBox()
+            target_editor.addItems(
+                [component.label for component in self.circuit.components]
+            )
+            table.setCellWidget(row, 1, target_editor)
+            property_editor = QComboBox()
+            table.setCellWidget(row, 2, property_editor)
+            value_editor = QLineEdit()
+            table.setCellWidget(row, 3, value_editor)
+
+            def update_value() -> None:
+                component = self.circuit.get(target_editor.currentText())
+                prop = property_editor.currentData()
+                if component is None or not prop:
+                    current = table.cellWidget(row, 3)
+                    if isinstance(current, QLineEdit):
+                        current.clear()
+                    return
+                value = component.get_prop(prop)
+                spec = component.prop_specs()[prop]
+                current = table.cellWidget(row, 3)
+                if spec.ptype == "bool":
+                    if not isinstance(current, QComboBox):
+                        current = QComboBox()
+                        current.addItem("Fermé / activé", "true")
+                        current.addItem("Ouvert / désactivé", "false")
+                        table.setCellWidget(row, 3, current)
+                    current.setCurrentIndex(
+                        current.findData(str(bool(value)).lower())
+                    )
+                else:
+                    if not isinstance(current, QLineEdit):
+                        current = QLineEdit()
+                        table.setCellWidget(row, 3, current)
+                    current.setText(str(value))
+                    current.setPlaceholderText(
+                        f"Valeur en {spec.unit}" if spec.unit else "Nouvelle valeur"
+                    )
+
+            def update_properties() -> None:
+                component = self.circuit.get(target_editor.currentText())
+                property_editor.clear()
+                if component is None:
+                    return
+                names = [
+                    name for name, spec in component.prop_specs().items()
+                    if name in supported_properties and spec.ptype in ("float", "bool")
+                ]
+                for name in names:
+                    property_editor.addItem(property_labels.get(name, name), name)
+                update_value()
+
+            target_editor.currentTextChanged.connect(update_properties)
+            property_editor.currentTextChanged.connect(update_value)
+            update_properties()
+
+        def build_scenario() -> str:
+            lines = [
+                f"loop 0s {duration.value():g}s",
+                f"fps {fps.value()}",
+                f"dt {step.value():g}ms",
+            ]
+            for row in range(table.rowCount()):
+                time_editor = table.cellWidget(row, 0)
+                target_editor = table.cellWidget(row, 1)
+                property_editor = table.cellWidget(row, 2)
+                value_editor = table.cellWidget(row, 3)
+                if time_editor.value() > duration.value():
+                    raise ValueError(
+                        f"Le temps de la ligne {row + 1} dépasse la durée choisie."
+                    )
+                prop = property_editor.currentData()
+                if not target_editor.currentText() or not prop:
+                    raise ValueError(f"Complétez les paramètres de la ligne {row + 1}.")
+                value = (
+                    str(value_editor.currentData())
+                    if isinstance(value_editor, QComboBox)
+                    else value_editor.text().strip()
+                )
+                if not value:
+                    raise ValueError(f"Indiquez une valeur à la ligne {row + 1}.")
+                lines.append(
+                    f"t={time_editor.value():g}s: "
+                    f"{target_editor.currentText()}.{prop}={value}"
+                )
+            scenario_text = "\n".join(lines)
+            self.engine.load_program(scenario_text)
+            if self.engine.program_errors:
+                raise ValueError("\n".join(self.engine.program_errors))
+            self.scenario_text = scenario_text
+            return scenario_text
+
+        add_button.clicked.connect(add_event_row)
+        remove_button.clicked.connect(
+            lambda: table.removeRow(table.currentRow())
+            if table.currentRow() >= 0 else None
+        )
+        if self.circuit.components:
+            add_event_row()
+
+        buttons = QHBoxLayout()
+        play_button = QPushButton("Lancer la simulation")
+        stop_button = QPushButton("Arrêter")
+        gif_button = QPushButton("Exporter en GIF…")
+        close_button = QPushButton("Fermer")
+        for button in (play_button, stop_button, gif_button, close_button):
+            buttons.addWidget(button)
+        layout.addLayout(buttons)
+
+        def start_playback() -> None:
+            try:
+                build_scenario()
+                if self.engine.is_transient:
+                    self.engine.end_transient(restore=True)
+                self.engine.begin_transient(self.engine.program)
+                self.canvas.update()
+                self.refresh_results()
+                self._play_timer.start()
+            except (RuntimeError, ValueError) as exc:
+                QMessageBox.warning(dialog, "Simulation impossible", str(exc))
+
+        def stop_playback() -> None:
+            self._play_timer.stop()
+            if self.engine.is_transient:
+                self.engine.end_transient(restore=True)
+            self.refresh_results()
+
+        def make_gif() -> None:
+            try:
+                build_scenario()
+            except ValueError as exc:
+                QMessageBox.warning(dialog, "Paramètres à vérifier", str(exc))
+                return
+            filename, _ = QFileDialog.getSaveFileName(
+                dialog, "Exporter l'animation", "simulation.gif", "GIF animé (*.gif)"
+            )
+            if not filename:
+                return
+            if not filename.lower().endswith(".gif"):
+                filename += ".gif"
+            progress = QProgressDialog(
+                "Simulation et capture des images…", None, 0,
+                max(1, self.engine.program.frame_count), dialog,
+            )
+            progress.setWindowTitle("Export GIF")
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
+            progress.setMinimumDuration(0)
+            try:
+                count = export_gif(
+                    self.engine, self.canvas, self.scenario_text, filename,
+                    lambda current, total: (
+                        progress.setMaximum(total),
+                        progress.setValue(current),
+                        QApplication_process_events(),
+                    ),
+                )
+                QMessageBox.information(
+                    dialog, "Export terminé",
+                    f"GIF créé avec {count} images :\n{filename}",
+                )
+            except (OSError, ValueError, RuntimeError) as exc:
+                QMessageBox.critical(dialog, "Export impossible", str(exc))
+            finally:
+                progress.close()
+                self.refresh_results()
+
+        play_button.clicked.connect(start_playback)
+        stop_button.clicked.connect(stop_playback)
+        gif_button.clicked.connect(make_gif)
+        close_button.clicked.connect(dialog.accept)
+        dialog.exec()
+
+    def _open_legacy_scenario_dialog(self) -> None:
         dialog = QDialog(self)
         dialog.setWindowTitle("Programme de simulation")
         dialog.resize(760, 560)

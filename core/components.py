@@ -1038,9 +1038,32 @@ class Wire:
 
     def __init__(self, points: List[Tuple[float, float]], label: Optional[str] = None):
         self.label = label or _next_label("W")
-        self.points: List[Tuple[int, int]] = [
-            snap_point(px, py) for px, py in points
-        ]
+        self.points = points
+
+    @property
+    def points(self) -> List[Tuple[int, int]]:
+        return self._points
+
+    @points.setter
+    def points(self, points: List[Tuple[float, float]]) -> None:
+        snapped = [snap_point(px, py) for px, py in points]
+        normalized = [snapped[0]] if snapped else []
+        for point in snapped[1:]:
+            previous = normalized[-1]
+            if previous[0] != point[0] and previous[1] != point[1]:
+                normalized.append((point[0], previous[1]))
+            if normalized[-1] != point:
+                normalized.append(point)
+        self._points = self._simplify(normalized)
+
+    @staticmethod
+    def _simplify(points: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+        compact: List[Tuple[int, int]] = []
+        for point in points:
+            if compact and point == compact[-1]:
+                continue
+            compact.append(point)
+        return compact
 
     @property
     def id(self) -> str:

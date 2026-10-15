@@ -7,7 +7,10 @@ exporter des schémas statiques ou des animations de scénarios.
 ## Fonctionnalités
 
 - Canevas à grille magnétique : aperçu des composants, fils orthogonaux,
-  déplacement, rotation et annotations de tension orientées.
+  tracé de fils en continu, déplacement, rotation et annotations de tension
+  orientées.
+- Repérage automatique A, B, C… des nœuds, renommage manuel, visualisation
+  des nœuds et mise en évidence des mailles indépendantes.
 - Générateur, pile, résistance IEC, potentiomètre, interrupteur, condensateur,
   bobine, diode, LED, lampe, moteur, fusible, masse, voltmètre, ampèremètre,
   ohmmètre et composants personnalisés résistifs.
@@ -15,8 +18,8 @@ exporter des schémas statiques ou des animations de scénarios.
   d'outils unique.
 - Résolution DC et transitoire (Euler implicite pour C et L), mesures de
   tension/courant/puissance, alertes de puissance et de courant.
-- Projets JSON réouvrables, export PNG/JPEG/SVG/PDF et GIF animé depuis un
-  scénario textuel.
+- Projets JSON réouvrables, export PNG/JPEG/SVG/PDF et GIF animé à partir
+  d'une séquence de paramètres configurée dans l'interface.
 
 ## Installation
 
@@ -41,24 +44,24 @@ de tour. En mode **Sélection**, cliquez un composant pour le déplacer ;
 utilisez `R` ou **Tourner**, et `Delete` ou **Supprimer** pour l'éditer.
 Sélectionnez un fil pour le déplacer, attrapez un de ses ronds d'extrémité
 pour le rerouter, ou faites un clic droit pour le supprimer. Le bouton milieu
-déplace la vue et la molette règle le zoom. Le double-clic sur un interrupteur
-le bascule. Le scénario et l'export GIF sont accessibles dans **Simulation**.
+déplace la vue et la molette règle le zoom ; les déplacements respectent
+également le niveau de zoom. Dans l'outil **Fil**, un repère vert apparaît à
+proximité d'une borne ou d'un fil pour indiquer l'accrochage. Le double-clic
+sur un interrupteur ou son bouton dans le panneau de propriétés le bascule.
+Pour tracer plusieurs fils à la suite, gardez l'outil **Fil**
+sélectionné et cliquez les points du trajet ; le clic droit ou `Échap` termine
+le tracé courant. Dans **Affichage**, activez les lettres de nœuds ou les
+indicateurs de mailles. Faites un clic droit près d'un nœud pour lui donner un
+nom personnalisé. Les flèches de tension reçoivent automatiquement un nom
+comme `Uab` ; l'aperçu indique leur orientation avant la pose, et leur trait
+reste visible au-dessus du circuit. Elles sont sélectionnables, renommables
+lors de leur création et supprimables avec `Delete`.
 
-Un exemple de scénario :
-
-```text
-loop 0s 3s
-fps 15
-dt 1ms
-t=0s: G1.voltage = 0V ; K1.closed = false
-t=0.5s: G1.voltage = 12V
-t=1s: K1.closed = true
-t=2s: K1.closed = false
-```
-
-Dans **Simulation > Scénario**, collez ou chargez le texte, puis lancez la
-simulation ou l'export GIF. Le GIF est capturé jusqu'à la fin de la durée
-définie (`loop`, ou dernier événement + `tail`).
+Le menu **Simulation > Configurer / lancer** permet de choisir une durée, la
+cadence d'images et le pas de calcul, puis d'ajouter des changements de
+paramètres horodatés avec des formulaires. Le même réglage sert à lancer la
+simulation ou à exporter un GIF, sans écrire de scénario. Le **Calculateur loi
+d'Ohm** déduit U, I, R et P à partir de deux valeurs saisies.
 
 ## Compilation
 
