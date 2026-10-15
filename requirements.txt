@@ -1,0 +1,7 @@
+# VoltForge — dépendances principales
+PyQt6>=6.5
+numpy>=1.24
+Pillow>=10.0
+
+# Dépendances de développement (optionnelles, pour la compilation en exécutable)
+# pyinstaller>=6.0

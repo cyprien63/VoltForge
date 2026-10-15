@@ -1,0 +1,60 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+.eggs/
+
+# --- Environnements virtuels ---
+venv/
+env/
+.venv/
+.virtualenv/
+ENV/
+
+# --- Build / distribution ---
+build/
+dist/
+out/
+*.spec.bak
+
+# --- PyInstaller ---
+*.manifest
+*.pyz
+pip-wheel-metadata/
+
+# --- Tests / couverture ---
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+
+# --- IDE / éditeurs ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Sorties de simulation (exports locaux) ---
+exports/
+*.gif
+!docs/**/*.gif
+*.vfproj.json.bak
+*.vfproj.json
+*.scenario.txt
+*.log

@@ -1,0 +1,16 @@
+# Moteur de simulation
+
+Le solveur est indépendant de Qt et utilise l'analyse nodale modifiée (MNA).
+Les sources de tension ajoutent des inconnues de branche ; résistances,
+interrupteurs, instruments et modèles compagnons sont stampés dans `A·x=b`.
+En DC, les condensateurs sont ouverts et les inductances sont remplacées par
+leur résistance de fil. En transitoire, C et L utilisent Euler implicite.
+
+Convention des résultats : `u = V(p)-V(n)`, `i` circule de p vers n et
+`p = u*i`. Le parseur de `core/scenario.py` fournit des événements horodatés
+au moteur `SimulationEngine`. Conserver les mutations d'événements typées via
+`Component.set_prop()` et tester les nouveaux composants en DC et transitoire.
+
+Ajouter des composants dans `core/components.py`, compléter leur estampillage
+dans `core/solver.py`, et vérifier sérialisation, affichage et édition des
+propriétés.
