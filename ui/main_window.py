@@ -13,6 +13,7 @@ from PyQt6.QtCore import QByteArray, QPointF, QSize, Qt, QTimer, QSettings
 from PyQt6.QtGui import QAction, QActionGroup, QIcon, QKeySequence, QPainter, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -22,6 +23,7 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -684,7 +686,39 @@ class MainWindow(QMainWindow):
 
         self.results_group = QGroupBox("Résultats MNA")
         results_layout = QVBoxLayout(self.results_group)
+        results_layout.setSpacing(8)
+
+        self.results_table = QTableWidget(0, 4)
+        self.results_table.setObjectName("resultsTable")
+        self.results_table.setHorizontalHeaderLabels(
+            ["Composant", "U (V)", "I (A)", "P (W)"]
+        )
+        self.results_table.verticalHeader().setVisible(False)
+        self.results_table.horizontalHeader().setStretchLastSection(False)
+        self.results_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
+        for column in range(1, 4):
+            self.results_table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeMode.ResizeToContents
+            )
+        self.results_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self.results_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.NoSelection
+        )
+        self.results_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.results_table.setShowGrid(False)
+        self.results_table.setAlternatingRowColors(True)
+        self.results_table.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.results_table.setMinimumHeight(120)
+        results_layout.addWidget(self.results_table)
+
         self.results_text = QLabel("En attente de calcul.")
+        self.results_text.setObjectName("resultsDetail")
         self.results_text.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
@@ -1113,20 +1147,39 @@ class MainWindow(QMainWindow):
 
     def refresh_results(self) -> None:
         solution = self.engine.solution
-        lines = [
-            f"<b>{'Transitoire' if solution.mode == 'transient' else 'Régime DC'}</b>",
-            f"{len(self.circuit.nodes)} nœud(s) · {self.circuit.mesh_count()} maille(s)",
-            "<i>Calculs : U = Vp − Vn · P = U×I · "
-            "branche résistive : I = U/R</i>",
+        components = [
+            component for component in self.circuit.components
+            if component.label in solution.branches
         ]
-        for component in self.circuit.components:
-            result = solution.branches.get(component.label)
-            if result is None:
-                continue
+        self.results_table.setRowCount(len(components))
+        for row, component in enumerate(components):
+            result = solution.branches[component.label]
+            cells = (
+                component.label,
+                f"{result.u:.5g}",
+                f"{result.i:.5g}",
+                f"{result.p:.5g}",
+            )
+            for column, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                if column:
+                    item.setTextAlignment(
+                        Qt.AlignmentFlag.AlignRight
+                        | Qt.AlignmentFlag.AlignVCenter
+                    )
+                self.results_table.setItem(row, column, item)
+
+        mode = "Transitoire" if solution.mode == "transient" else "Régime DC"
+        lines = [
+            f"<b>{mode}</b> — {len(self.circuit.nodes)} nœud(s) · "
+            f"{self.circuit.mesh_count()} maille(s)",
+            "<i>U = Vp − Vn · P = U×I · branche résistive : I = U/R</i>",
+        ]
+        for component in components:
+            result = solution.branches[component.label]
             state = f" — {result.message}" if result.message else ""
             lines.append(
-                f"<b>{component.label}</b>: {result.u:.5g} V · "
-                f"{result.i:.5g} A · {result.p:.5g} W{state}<br>"
+                f"<b>{component.label}</b>{state}<br>"
                 f"<i>{self._calculation_formula(component, result)}</i>"
             )
         lines.extend(f"<font color='#ff6978'>{error}</font>" for error in solution.errors)
