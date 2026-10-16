@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import io
+import html
 import math
 from pathlib import Path
 import sys
@@ -453,6 +454,9 @@ class MainWindow(QMainWindow):
             "accent": "#0f9f86",
             "hover": "#e9f7f4",
             "selected": "#d8f3ed",
+            "inset": "#f1f5fa",
+            "warning": "#b54708",
+            "error": "#b42318",
         },
         "dark": {
             "background": "#111a24",
@@ -464,6 +468,9 @@ class MainWindow(QMainWindow):
             "accent": "#45d2b4",
             "hover": "#253a46",
             "selected": "#23483f",
+            "inset": "#141f2b",
+            "warning": "#ffc857",
+            "error": "#ff8a92",
         },
     }
     ICONS = {
@@ -1180,26 +1187,66 @@ class MainWindow(QMainWindow):
 
     def refresh_results(self) -> None:
         solution = self.engine.solution
-        lines = [
-            f"<b>{'Transitoire' if solution.mode == 'transient' else 'Régime DC'}</b>",
-            f"{len(self.circuit.nodes)} nœud(s) · {self.circuit.mesh_count()} maille(s)",
-            "<i>Calculs : U = Vp − Vn · P = U×I · "
-            "branche résistive : I = U/R</i>",
-        ]
+        colors = self.colors
+        muted = colors["muted"]
+        mode = "Transitoire" if solution.mode == "transient" else "Régime DC"
+        self.results_summary.setText(
+            f"{mode} · {len(self.circuit.nodes)} nœud(s) · "
+            f"{self.circuit.mesh_count()} maille(s)"
+        )
+        header = (
+            "<tr>"
+            f"<td style='color:{muted}; font-size:9pt'>Composant</td>"
+            f"<td align='right' style='color:{muted}; font-size:9pt'>U (V)</td>"
+            f"<td align='right' style='color:{muted}; font-size:9pt'>I (A)</td>"
+            f"<td align='right' style='color:{muted}; font-size:9pt'>P (W)</td>"
+            "</tr>"
+        )
+        rows = []
         for component in self.circuit.components:
             result = solution.branches.get(component.label)
             if result is None:
                 continue
-            state = f" — {result.message}" if result.message else ""
-            lines.append(
-                f"<b>{component.label}</b>: {result.u:.5g} V · "
-                f"{result.i:.5g} A · {result.p:.5g} W{state}<br>"
-                f"<i>{self._calculation_formula(component, result)}</i>"
+            state = (
+                f" · <span style='color:{colors['warning']}'>"
+                f"{html.escape(result.message)}</span>"
+                if result.message else ""
             )
-        lines.extend(f"<font color='#ff6978'>{error}</font>" for error in solution.errors)
-        lines.extend(f"<font color='#ffc857'>{warning}</font>"
-                     for warning in solution.warnings)
-        self.results_text.setText("<br>".join(lines))
+            rows.append(
+                "<tr>"
+                f"<td><b>{html.escape(component.label)}</b></td>"
+                f"<td align='right'>{result.u:.5g}</td>"
+                f"<td align='right'>{result.i:.5g}</td>"
+                f"<td align='right'>{result.p:.5g}</td>"
+                "</tr>"
+                "<tr>"
+                f"<td colspan='4' bgcolor='{colors['inset']}'"
+                f" style='color:{muted}; font-size:9pt'>"
+                f"<i>{html.escape(self._calculation_formula(component, result))}</i>"
+                f"{state}</td>"
+                "</tr>"
+            )
+        if rows:
+            body = (
+                "<table cellpadding='4' cellspacing='0' width='100%'>"
+                f"{header}{''.join(rows)}</table>"
+            )
+        else:
+            body = (
+                f"<span style='color:{muted}'>Aucune branche à calculer pour "
+                "l'instant.</span>"
+            )
+        notices = [
+            f"<span style='color:{colors['error']}'>{html.escape(error)}</span>"
+            for error in solution.errors
+        ]
+        notices.extend(
+            f"<span style='color:{colors['warning']}'>{html.escape(warning)}</span>"
+            for warning in solution.warnings
+        )
+        if notices:
+            body += "<br>" + "<br>".join(notices)
+        self.results_text.setText(body)
         self.refresh_inspector()
         self.canvas.update()
 
