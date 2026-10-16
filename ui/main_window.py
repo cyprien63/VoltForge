@@ -687,23 +687,20 @@ class MainWindow(QMainWindow):
 
         right = QWidget()
         right.setObjectName("inspectorPanel")
-        right.setMinimumWidth(300)
+        right.setMinimumWidth(320)
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(14, 14, 14, 14)
-        right_layout.setSpacing(12)
+        right_layout.setContentsMargins(10, 8, 10, 8)
+        right_layout.setSpacing(8)
 
         panel_title = QLabel("Inspecteur")
         panel_title.setObjectName("panelTitle")
         right_layout.addWidget(panel_title)
-        panel_rule = QFrame()
-        panel_rule.setObjectName("panelRule")
-        panel_rule.setFrameShape(QFrame.Shape.HLine)
-        panel_rule.setFixedHeight(1)
-        right_layout.addWidget(panel_rule)
 
         self.selection_group = QGroupBox("Propriétés")
+        self.selection_group.setObjectName("selectionGroup")
         self.selection_layout = QVBoxLayout(self.selection_group)
-        self.selection_layout.setSpacing(10)
+        self.selection_layout.setContentsMargins(8, 10, 8, 10)
+        self.selection_layout.setSpacing(8)
         self.selection_label = QLabel("Aucun élément sélectionné")
         self.selection_label.setObjectName("selectionSummary")
         self.selection_label.setTextFormat(Qt.TextFormat.RichText)
@@ -716,8 +713,8 @@ class MainWindow(QMainWindow):
         self.quick_controls_group = QWidget()
         self.quick_controls_group.setObjectName("quickControls")
         quick_layout = QVBoxLayout(self.quick_controls_group)
-        quick_layout.setContentsMargins(12, 10, 12, 12)
-        quick_layout.setSpacing(8)
+        quick_layout.setContentsMargins(8, 8, 8, 8)
+        quick_layout.setSpacing(6)
         quick_title = QLabel("Réglage en direct")
         quick_title.setObjectName("sectionTitle")
         quick_layout.addWidget(quick_title)
@@ -726,7 +723,7 @@ class MainWindow(QMainWindow):
         quick_hint.setWordWrap(True)
         quick_layout.addWidget(quick_hint)
         self.quick_controls_layout = QVBoxLayout()
-        self.quick_controls_layout.setSpacing(10)
+        self.quick_controls_layout.setSpacing(8)
         quick_layout.addLayout(self.quick_controls_layout)
         self.quick_controls_group.hide()
         self._quick_controls_component: Component | None = None
@@ -760,8 +757,10 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.selection_group)
 
         self.results_group = QGroupBox("Résultats")
+        self.results_group.setObjectName("resultsGroup")
         results_layout = QVBoxLayout(self.results_group)
-        results_layout.setSpacing(8)
+        results_layout.setContentsMargins(8, 10, 8, 10)
+        results_layout.setSpacing(6)
         self.results_summary = QLabel("En attente de calcul.")
         self.results_summary.setObjectName("resultsSummary")
         self.results_summary.setWordWrap(True)
@@ -782,7 +781,7 @@ class MainWindow(QMainWindow):
         )
         inspector_scroll.setWidget(right)
         splitter.addWidget(inspector_scroll)
-        splitter.setSizes([900, 320])
+        splitter.setSizes([900, 340])
         simulation_toolbar = self.addToolBar("Simulation")
         simulation_toolbar.setMovable(False)
         self._toolbar_action(
@@ -854,7 +853,7 @@ class MainWindow(QMainWindow):
             QToolButton:checked {{ background: {selected}; color: {accent}; }}
             QPushButton {{
                 background: transparent; border: 1px solid {border};
-                border-radius: 6px; padding: 7px 10px;
+                border-radius: 6px; padding: 6px 10px;
             }}
             QPushButton:hover {{ background: {hover}; }}
             QPushButton:pressed {{ background: {selected}; }}
@@ -878,11 +877,11 @@ class MainWindow(QMainWindow):
             }}
             QGroupBox {{
                 background: {card}; border: 1px solid {border}; border-radius: 8px;
-                margin-top: 14px; padding: 10px;
+                margin-top: 12px; padding: 6px;
             }}
             QGroupBox::title {{
-                subcontrol-origin: margin; left: 12px; padding: 0 6px;
-                font-weight: 600;
+                subcontrol-origin: margin; left: 10px; padding: 0 4px;
+                font-weight: 600; font-size: 10pt; color: {text};
             }}
             QLineEdit, QDoubleSpinBox, QSpinBox, QComboBox, QTableWidget,
             QPlainTextEdit {{
@@ -925,13 +924,12 @@ class MainWindow(QMainWindow):
             QWidget#quickControls {{
                 background: {inset}; border: 1px solid {border}; border-radius: 8px;
             }}
-            QFrame#panelRule {{ background: {border}; border: none; }}
-            QLabel#panelTitle {{ font-size: 12pt; font-weight: 600; }}
-            QLabel#sectionTitle {{ font-weight: 600; }}
+            QLabel#panelTitle {{ font-size: 11pt; font-weight: 600; }}
+            QLabel#sectionTitle {{ font-weight: 600; font-size: 10pt; }}
             QLabel#mutedText {{ color: {muted}; font-size: 9pt; }}
-            QLabel#selectionSummary {{ font-size: 10.5pt; }}
+            QLabel#selectionSummary {{ font-size: 10pt; line-height: 150%; }}
             QLabel#resultsSummary {{ color: {muted}; font-size: 9pt; }}
-            QLabel#resultsBody {{ font-size: 10pt; }}
+            QLabel#resultsBody {{ font-size: 9.5pt; line-height: 150%; }}
             QLabel#quickParameterLabel {{ font-weight: 600; }}
             QLabel#quickParameterValue {{ color: {accent}; font-weight: 600; }}
             QSlider::groove:horizontal {{
