@@ -102,6 +102,16 @@ les enregistrer, de les abandonner ou d'annuler la fermeture.
 
 `./compil.sh` (Windows : `compil.bat`) construit un exécutable avec PyInstaller.
 
+## Releases automatiques
+
+Chaque push sur `main` déclenche une compilation Windows et Linux, puis publie
+une release GitHub avec l'archive Windows (`.zip`), l'archive Linux portable
+(`.tar.gz`) et le paquet Debian (`.deb`). La première release est `v1.0.0` ;
+chaque push suivant incrémente le numéro de correctif (`v1.0.1`, `v1.0.2`, etc.).
+Les notes de version listent les commits, leurs auteurs et les fichiers modifiés.
+Le workflow nécessite que les Actions aient le droit d'écrire dans les releases
+du dépôt.
+
 ## Architecture
 
 - `core/` : modèles électriques, topologie, parseur de scénario et solveur MNA,

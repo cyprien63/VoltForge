@@ -1,0 +1,195 @@
+name: Build and release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out full history and tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Calculate version and release notes
+        id: version
+        shell: bash
+        run: |
+          version="$(python scripts/release_version.py version)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          python scripts/release_version.py notes > release-notes.md
+
+      - name: Save release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: error
+
+  build-windows:
+    needs: prepare
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build Windows application
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --windowed --name VoltForge --add-data "assets\icons;assets\icons" main.py
+          Set-Content -Path "dist\VoltForge\VERSION.txt" -Value "${{ needs.prepare.outputs.version }}"
+          Compress-Archive -Path "dist\VoltForge" -DestinationPath "VoltForge-${{ needs.prepare.outputs.version }}-windows-x64.zip"
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-package
+          path: VoltForge-${{ needs.prepare.outputs.version }}-windows-x64.zip
+          if-no-files-found: error
+
+  build-linux:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install system packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes dpkg-dev
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build Linux application and packages
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          python -m PyInstaller --noconfirm --clean --windowed --name VoltForge --add-data "assets/icons:assets/icons" main.py
+          printf '%s\n' "$VERSION" > dist/VoltForge/VERSION.txt
+          tar -czf "VoltForge-${VERSION}-linux-x64.tar.gz" -C dist VoltForge
+
+          package_root="$RUNNER_TEMP/voltforge-deb"
+          install -d "$package_root/DEBIAN"
+          install -d "$package_root/opt/voltforge"
+          install -d "$package_root/usr/share/applications"
+          install -d "$package_root/usr/share/icons/hicolor/scalable/apps"
+          cp -a dist/VoltForge/. "$package_root/opt/voltforge/"
+          install -m 0644 assets/icons/generator-voltage.svg \
+            "$package_root/usr/share/icons/hicolor/scalable/apps/voltforge.svg"
+          cat > "$package_root/DEBIAN/control" <<EOF
+          Package: voltforge
+          Version: ${VERSION#v}
+          Section: science
+          Priority: optional
+          Architecture: amd64
+          Maintainer: VoltForge contributors
+          Description: Interactive electrical circuit design and simulation
+           Desktop application for drawing and simulating electrical circuits.
+          EOF
+          cat > "$package_root/usr/share/applications/voltforge.desktop" <<'EOF'
+          [Desktop Entry]
+          Name=VoltForge
+          Comment=Electrical circuit design and simulation
+          Exec=/opt/voltforge/VoltForge
+          Icon=voltforge
+          Terminal=false
+          Type=Application
+          Categories=Education;Science;Engineering;
+          EOF
+          dpkg-deb --build --root-owner-group "$package_root" \
+            "VoltForge-${VERSION}-linux-amd64.deb"
+
+      - name: Upload Linux packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            VoltForge-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz
+            VoltForge-${{ needs.prepare.outputs.version }}-linux-amd64.deb
+          if-no-files-found: error
+
+  publish:
+    needs:
+      - prepare
+      - build-windows
+      - build-linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source and release metadata
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download release packages
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-package
+          path: release-assets
+
+      - name: Download Linux packages
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-packages
+          path: release-assets
+
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: release-metadata
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TARGET_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" release-assets/* --clobber
+          else
+            gh release create "$VERSION" release-assets/* \
+              --target "$TARGET_SHA" \
+              --title "VoltForge $VERSION" \
+              --notes-file release-metadata/release-notes.md
+          fi
