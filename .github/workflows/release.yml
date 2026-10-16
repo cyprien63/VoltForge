@@ -104,7 +104,8 @@ jobs:
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "installer.iss"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          python -m PyInstaller --noconfirm --clean --windowed --onefile --name VoltForge-Portable --distpath "dist\portable" --workpath "build\portable" --specpath "build\portable" --add-data "assets\icons;assets\icons" main.py
+          $iconPath = (Resolve-Path "assets\icons").Path
+          python -m PyInstaller --noconfirm --clean --windowed --onefile --name VoltForge-Portable --distpath "dist\portable" --workpath "build\portable" --specpath "build\portable" --add-data "${iconPath};assets\icons" main.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Rename-Item -Path "dist\portable\VoltForge-Portable.exe" -NewName "VoltForge-${version}-windows-x64-portable.exe"
 
