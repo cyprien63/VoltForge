@@ -694,6 +694,7 @@ class MainWindow(QMainWindow):
         self.selection_layout.setSpacing(10)
         self.selection_label = QLabel("Aucun élément sélectionné")
         self.selection_label.setObjectName("selectionSummary")
+        self.selection_label.setTextFormat(Qt.TextFormat.RichText)
         self.selection_label.setWordWrap(True)
         self.selection_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
@@ -956,11 +957,14 @@ class MainWindow(QMainWindow):
     def refresh_inspector(self) -> None:
         item = self.canvas.selected
         selected_count = len(self.canvas.selected_items)
+        colors = self.colors
+        muted = colors["muted"]
         if selected_count > 1:
             self._refresh_quick_controls(None)
             self.selection_label.setText(
-                f"{selected_count} éléments sélectionnés\n"
-                "Faites glisser pour les déplacer ensemble ; Supprimer pour tout effacer."
+                f"{selected_count} éléments sélectionnés"
+                f"\n<br><span style='color:{muted}'>Faites glisser pour les "
+                "déplacer ensemble ; Supprimer pour tout effacer.</span>"
             )
             self.edit_button.setEnabled(False)
             self.rotate_button.setEnabled(False)
@@ -971,9 +975,12 @@ class MainWindow(QMainWindow):
         if item is None:
             self._refresh_quick_controls(None)
             self.selection_label.setText(
+                "Aucun élément sélectionné"
+                f"\n<br><span style='color:{muted}'>"
                 f"{len(self.circuit.components)} composant(s), "
-                f"{len(self.circuit.wires)} fil(s), {len(self.circuit.nodes)} nœud(s), "
-                f"{self.circuit.mesh_count()} maille(s)"
+                f"{len(self.circuit.wires)} fil(s), "
+                f"{len(self.circuit.nodes)} nœud(s), "
+                f"{self.circuit.mesh_count()} maille(s)</span>"
             )
             self.edit_button.setEnabled(False)
             self.rotate_button.setEnabled(False)
@@ -984,28 +991,55 @@ class MainWindow(QMainWindow):
         if isinstance(item, Component):
             self._refresh_quick_controls(item)
             result = self.engine.solution.branches.get(item.label)
-            detail = f"{item.short_description()}\n{item.display_value()}"
+            lines = [f"<b>{html.escape(item.short_description())}</b>"]
+            value = item.display_value()
+            if value:
+                lines.append(
+                    f"<span style='color:{muted}'>{html.escape(value)}</span>"
+                )
             if result is not None:
-                detail += f"\nU = {result.u:.5g} V\nI = {result.i:.5g} A"
-                detail += f"\n{self._calculation_formula(item, result)}"
+                lines.append(self._metrics_table(result, muted))
+                lines.append(
+                    f"<span style='color:{muted}'><i>"
+                    f"{html.escape(self._calculation_formula(item, result))}"
+                    "</i></span>"
+                )
                 if result.message:
-                    detail += f"\n{result.message}"
+                    lines.append(
+                        f"<span style='color:{colors['warning']}'>"
+                        f"{html.escape(result.message)}</span>"
+                    )
                 if isinstance(item, Motor):
-                    detail += f"\nVitesse = {item.rpm(result.i):.0f} tr/min"
+                    lines.append(
+                        f"<span style='color:{muted}'>Vitesse = "
+                        f"{item.rpm(result.i):.0f} tr/min</span>"
+                    )
+            detail = self._html_block(lines)
         elif isinstance(item, VoltageArrow):
             self._refresh_quick_controls(None)
             item.resolve_nodes(self.circuit)
             value = item.voltage(self.engine.solution)
-            detail = f"{item.label}\nFlèche de tension orientée A → B"
+            lines = [
+                f"<b>{html.escape(item.label)}</b>",
+                f"<span style='color:{muted}'>Flèche de tension orientée A → B</span>",
+            ]
             if item.node_a in self.circuit.nodes:
-                detail += f"\nNœud de départ : {self.circuit.nodes[item.node_a].name}"
+                lines.append(
+                    "Nœud de départ : "
+                    + html.escape(self.circuit.nodes[item.node_a].name)
+                )
             if item.node_b in self.circuit.nodes:
-                detail += f"\nNœud d'arrivée : {self.circuit.nodes[item.node_b].name}"
+                lines.append(
+                    "Nœud d'arrivée : "
+                    + html.escape(self.circuit.nodes[item.node_b].name)
+                )
             if value is not None:
-                detail += f"\nTension : {value:.5g} V"
+                lines.append(f"<b>Tension : {value:.5g} V</b>")
+            detail = self._html_block(lines)
         else:
             self._refresh_quick_controls(None)
-            detail = f"Fil {getattr(item, 'label', '')}"
+            label = html.escape(str(getattr(item, "label", "") or ""))
+            detail = f"<b>Fil {label}</b>".strip()
         self.selection_label.setText(detail)
         self.edit_button.setEnabled(isinstance(item, Component))
         self.rotate_button.setEnabled(isinstance(item, Component))
@@ -1249,6 +1283,27 @@ class MainWindow(QMainWindow):
         self.results_text.setText(body)
         self.refresh_inspector()
         self.canvas.update()
+
+    @staticmethod
+    def _html_block(lines: list[str]) -> str:
+        return "\n<br>".join(lines)
+
+    @staticmethod
+    def _metrics_table(result: BranchResult, muted: str) -> str:
+        rows = (
+            ("U", f"{result.u:.5g} V"),
+            ("I", f"{result.i:.5g} A"),
+            ("P", f"{result.p:.5g} W"),
+        )
+        cells = "".join(
+            f"<tr><td style='color:{muted}'>{name}</td>"
+            f"<td align='right'><b>{value}</b></td></tr>"
+            for name, value in rows
+        )
+        return (
+            "<table cellpadding='2' cellspacing='0' width='100%'>"
+            f"{cells}</table>"
+        )
 
     @staticmethod
     def _calculation_formula(
