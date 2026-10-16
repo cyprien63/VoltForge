@@ -720,6 +720,9 @@ class MainWindow(QMainWindow):
         self.results_table.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
+        self.results_table.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         self.results_table.setMinimumHeight(120)
         results_layout.addWidget(self.results_table)
 
@@ -1207,6 +1210,11 @@ class MainWindow(QMainWindow):
                         | Qt.AlignmentFlag.AlignVCenter
                     )
                 self.results_table.setItem(row, column, item)
+
+        header_height = self.results_table.horizontalHeader().height()
+        row_height = self.results_table.verticalHeader().defaultSectionSize()
+        rows = max(1, len(components))
+        self.results_table.setFixedHeight(header_height + row_height * rows + 4)
 
         mode = "Transitoire" if solution.mode == "transient" else "Régime DC"
         lines = [
