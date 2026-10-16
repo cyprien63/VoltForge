@@ -655,9 +655,13 @@ class MainWindow(QMainWindow):
         self.selection_label.setObjectName("selectionDetail")
         self.selection_label.setWordWrap(True)
         self.selection_layout.addWidget(self.selection_label)
-        self.quick_controls_group = QGroupBox("Réglage en direct")
+        self.quick_controls_group = QWidget()
         quick_layout = QVBoxLayout(self.quick_controls_group)
-        quick_layout.setContentsMargins(10, 12, 10, 8)
+        quick_layout.setContentsMargins(0, 4, 0, 0)
+        quick_layout.setSpacing(6)
+        quick_heading = QLabel("Réglage en direct")
+        quick_heading.setObjectName("sectionHeading")
+        quick_layout.addWidget(quick_heading)
         quick_hint = QLabel("Les résultats se recalculent pendant le réglage.")
         quick_hint.setObjectName("mutedText")
         quick_hint.setWordWrap(True)
@@ -863,6 +867,11 @@ class MainWindow(QMainWindow):
                 font-size: 12pt; font-weight: 600; padding-bottom: 2px;
             }}
             QLabel#selectionDetail {{ color: {text}; }}
+            QLabel#sectionHeading {{
+                color: {muted}; font-weight: 600; text-transform: uppercase;
+                letter-spacing: 1px; font-size: 8.5pt;
+                border-top: 1px solid {border}; padding-top: 9px;
+            }}
             QLabel#resultsDetail {{ color: {muted}; font-size: 9pt; }}
             QLabel#mutedText {{ color: {muted}; font-size: 9pt; }}
             QLabel#quickParameterLabel {{ font-weight: 600; }}
