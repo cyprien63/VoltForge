@@ -23,6 +23,8 @@ class VoltageArrow:
                  label: Optional[str] = None, circuit: Any = None):
         self.start: Tuple[int, int] = (snap(start[0]), snap(start[1]))
         self.end: Tuple[int, int] = (snap(end[0]), snap(end[1]))
+        self.offset = 24.0
+        self.label_offset = (0.0, -20.0)
         self.label = label or ""
         self.node_a: Optional[int] = None
         self.node_b: Optional[int] = None
@@ -97,6 +99,8 @@ class VoltageArrow:
             "automatic_label": self._automatic_label,
             "start": list(self.start),
             "end": list(self.end),
+            "offset": self.offset,
+            "label_offset": list(self.label_offset),
         }
 
     @classmethod
@@ -109,4 +113,7 @@ class VoltageArrow:
             tuple(data["start"]), tuple(data["end"]),
             label=None if automatic else label,
         )
+        a.offset = float(data.get("offset", 24.0))
+        label_offset = data.get("label_offset", (0.0, -20.0))
+        a.label_offset = (float(label_offset[0]), float(label_offset[1]))
         return a

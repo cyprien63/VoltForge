@@ -7,13 +7,16 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+import zipfile
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPoint, Qt, QTimer
 from PyQt6.QtGui import QIcon, QImage
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QPlainTextEdit, QPushButton, QTableWidget
+from PyQt6.QtWidgets import (
+    QApplication, QPlainTextEdit, QPushButton, QMessageBox, QTableWidget,
+)
 from PIL import Image, ImageChops
 
 from core.circuit import Circuit
@@ -21,13 +24,18 @@ from core.components import Battery, Kind, Lamp, Led, Resistor, Switch, Wire
 from core.simulation import SimulationEngine
 from core.voltage_arrow import VoltageArrow
 from exporters.gif import export_gif
-from ui.main_window import MainWindow, OhmCalculatorDialog
+from ui.main_window import MainWindow, OhmCalculatorDialog, ResistorSizerDialog
 
 
 class CircuitEditorTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
+
+    def tearDown(self) -> None:
+        for widget in QApplication.topLevelWidgets():
+            if isinstance(widget, MainWindow):
+                widget.is_dirty = False
 
     def test_component_catalog_has_one_palette_and_valid_icons(self) -> None:
         window = MainWindow()
@@ -134,6 +142,88 @@ class CircuitEditorTests(unittest.TestCase):
         QTest.keyClick(canvas, Qt.Key.Key_Delete)
         self.assertNotIn(loose_wire, window.circuit.wires)
 
+    def test_marquee_select_moves_and_deletes_multiple_elements(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        first = window.circuit.add(Resistor(0, 0, label="R_MULTI1"))
+        second = window.circuit.add(Resistor(80, 0, label="R_MULTI2"))
+        bridge = window.circuit.add_wire([(20, 0), (60, 0)])
+        window.engine.recompute()
+        window.resize(900, 650)
+        window.show()
+        self.app.processEvents()
+        canvas = window.canvas
+        center = QPoint(canvas.width() // 2, canvas.height() // 2)
+
+        QTest.mousePress(canvas, Qt.MouseButton.LeftButton,
+                         pos=center + QPoint(-40, -40))
+        QTest.mouseMove(canvas, center + QPoint(120, 40))
+        QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton,
+                           pos=center + QPoint(120, 40))
+        self.assertEqual(set(canvas.selected_items), {first, second, bridge})
+
+        QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=center)
+        QTest.mouseMove(canvas, center + QPoint(40, 0))
+        QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton,
+                           pos=center + QPoint(40, 0))
+        self.assertEqual(first.position, (40.0, 0.0))
+        self.assertEqual(second.position, (120.0, 0.0))
+        self.assertEqual(bridge.points, [(60, 0), (100, 0)])
+        self.assertEqual(window.selection_label.text().splitlines()[0],
+                         "3 éléments sélectionnés")
+        QTest.keyClick(canvas, Qt.Key.Key_Delete)
+        self.assertEqual(window.circuit.components, [])
+
+    def test_space_drag_pans_workplane_and_theme_toggle_changes_canvas(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        window.resize(900, 650)
+        window.show()
+        self.app.processEvents()
+        canvas = window.canvas
+        origin = QPoint(round(canvas._origin.x()), round(canvas._origin.y()))
+        QTest.keyPress(canvas, Qt.Key.Key_Space)
+        QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=origin)
+        QTest.mouseMove(canvas, origin + QPoint(60, 30))
+        QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton,
+                           pos=origin + QPoint(60, 30))
+        QTest.keyRelease(canvas, Qt.Key.Key_Space)
+        self.assertEqual(
+            (canvas._origin.x(), canvas._origin.y()),
+            (canvas._pan_origin_start.x() + 60,
+             canvas._pan_origin_start.y() + 30),
+        )
+
+        window.set_theme("light")
+        self.assertEqual(canvas.BACKGROUND.name(), "#f7fafc")
+        window.set_theme("dark")
+        self.assertEqual(canvas.BACKGROUND.name(), "#101820")
+
+    def test_wire_bridging_component_terminals_moves_and_rotates_as_one_route(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        resistor = window.circuit.add(Resistor(0, 0))
+        bridge = window.circuit.add_wire([(-20, 0), (20, 0)])
+        window.engine.recompute()
+        window.resize(900, 650)
+        window.show()
+        self.app.processEvents()
+        canvas = window.canvas
+        center = QPoint(canvas.width() // 2, canvas.height() // 2)
+
+        QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=center)
+        QTest.mouseMove(canvas, center + QPoint(40, 0))
+        QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton,
+                           pos=center + QPoint(40, 0))
+        self.assertEqual(bridge.points, [(20, 0), (60, 0)])
+
+        canvas.rotate_component(resistor)
+        self.assertEqual(bridge.points, [(40, -20), (40, 20)])
+        self.assertTrue(all(
+            x1 == x2 or y1 == y2
+            for (x1, y1), (x2, y2) in zip(bridge.points, bridge.points[1:])
+        ))
+
     def test_crossing_wires_form_a_junction(self) -> None:
         circuit = Circuit()
         horizontal = circuit.add_wire([(-40, 0), (40, 0)])
@@ -209,6 +299,28 @@ class CircuitEditorTests(unittest.TestCase):
         restored.remove_arrow(restored.arrows[0])
         self.assertEqual(restored.arrows, [])
 
+    def test_node_markers_are_visible_over_components_when_enabled(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        window.circuit.add(Resistor(0, 0))
+        window.circuit.recompute_nodes()
+        window.resize(900, 650)
+        window.show()
+        self.app.processEvents()
+        window.node_labels_action.setChecked(True)
+        canvas = window.canvas
+        image = QImage(canvas.size(), QImage.Format.Format_ARGB32)
+        canvas.render(image)
+        center_x = round(canvas._origin.x() - 20 * canvas.zoom)
+        center_y = round(canvas._origin.y())
+        visible_marker = any(
+            image.pixelColor(x, y).name() == "#63c9e8"
+            for x in range(center_x - 7, center_x + 8)
+            for y in range(center_y - 7, center_y + 8)
+        )
+        self.assertTrue(visible_marker)
+        self.assertIn("Nœuds : 2", canvas._topology_counter_text())
+
     def test_selected_voltage_arrow_can_be_removed_from_inspector(self) -> None:
         window = MainWindow()
         self.addCleanup(window.close)
@@ -260,6 +372,67 @@ class CircuitEditorTests(unittest.TestCase):
         self.assertEqual((arrow.start, arrow.end), ((-20, 0), (20, 0)))
         self.assertIs(canvas._item_at(0, 10), arrow)
 
+    def test_voltage_arrow_label_and_side_can_be_dragged_separately(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        arrow = VoltageArrow((-100, 0), (100, 0), label="Uab")
+        window.circuit.arrows.append(arrow)
+        window.circuit.recompute_nodes()
+        window.resize(900, 650)
+        window.show()
+        self.app.processEvents()
+        canvas = window.canvas
+
+        def screen_pos(x: float, y: float) -> QPoint:
+            return QPoint(round(canvas._origin.x() + x * canvas.zoom),
+                          round(canvas._origin.y() + y * canvas.zoom))
+
+        label_rect = canvas._arrow_label_rect(arrow, "Uab")
+        label_center = screen_pos(label_rect.center().x(),
+                                  label_rect.center().y())
+        QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=label_center)
+        QTest.mouseMove(canvas, label_center + QPoint(30, 40))
+        QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton,
+                           pos=label_center + QPoint(30, 40))
+        self.assertEqual(arrow.label_offset, (30.0, 20.0))
+        self.assertEqual(arrow.offset, 24.0)
+
+        line_pos = screen_pos(0, arrow.offset)
+        QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=line_pos)
+        QTest.mouseMove(canvas, line_pos + QPoint(0, 20))
+        QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton,
+                           pos=line_pos + QPoint(0, 20))
+        self.assertEqual(arrow.offset, 44.0)
+        restored = Circuit.from_dict(window.circuit.to_dict()).arrows[0]
+        self.assertEqual(restored.offset, 44.0)
+        self.assertEqual(restored.label_offset, (30.0, 20.0))
+
+    def test_component_polarity_marks_are_rendered_at_both_terminals(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        window.circuit.add(Resistor(0, 0))
+        window.resize(900, 650)
+        window.show()
+        self.app.processEvents()
+        canvas = window.canvas
+        image = QImage(canvas.size(), QImage.Format.Format_ARGB32)
+        canvas.render(image)
+
+        def count_ink(scene_x: int) -> int:
+            left = round(canvas._origin.x() + (scene_x - 7) * canvas.zoom)
+            top = round(canvas._origin.y() + 2 * canvas.zoom)
+            width = round(14 * canvas.zoom)
+            height = round(17 * canvas.zoom)
+            background = canvas.BACKGROUND
+            return sum(
+                image.pixelColor(x, y) != background
+                for x in range(left, left + width)
+                for y in range(top, top + height)
+            )
+
+        self.assertGreater(count_ink(-20), 0)
+        self.assertGreater(count_ink(20), 0)
+
     def test_wire_snap_target_and_drag_coordinates_respect_zoom(self) -> None:
         window = MainWindow()
         self.addCleanup(window.close)
@@ -298,7 +471,8 @@ class CircuitEditorTests(unittest.TestCase):
 
     def test_open_switch_reduces_current_and_has_an_explicit_toggle(self) -> None:
         circuit = Circuit()
-        circuit.add(Battery(-80, 0, rotation=90, ri=1.0, label="BAT_SWITCH"))
+        circuit.add(Battery(-80, 0, rotation=90, ri=1.0, p_max=500.0,
+                            label="BAT_SWITCH"))
         switch = circuit.add(Switch(0, 0, label="K_TEST"))
         circuit.add_wire([(-80, -20), (-20, -20), (-20, 0)])
         circuit.add_wire([(-80, 20), (20, 20), (20, 0)])
@@ -442,6 +616,96 @@ class CircuitEditorTests(unittest.TestCase):
         lamp_circuit.add_wire([(-80, 20), (20, 20), (20, 0)])
         lamp_solution = SimulationEngine(lamp_circuit).recompute()
         self.assertGreater(abs(lamp_solution.branches[lamp.label].p), 1.0)
+
+    def test_overvoltage_burns_lamp_and_short_circuited_battery(self) -> None:
+        circuit = Circuit()
+        battery = circuit.add(Battery(-40, 0, voltage=220, ri=0.1))
+        lamp = circuit.add(Lamp(40, 0, resistance=50, u_rated=5, p_max=10))
+        circuit.add_wire([(-60, 0), (-60, -40), (20, -40), (20, 0)])
+        circuit.add_wire([(-20, 0), (-20, 40), (60, 40), (60, 0)])
+
+        solution = SimulationEngine(circuit).recompute()
+
+        self.assertTrue(solution.solved, solution.errors)
+        self.assertTrue(lamp.get_prop("blown"))
+        self.assertTrue(battery.get_prop("blown"))
+        self.assertEqual(solution.branches[lamp.label].state, "blown")
+        self.assertEqual(solution.branches[battery.label].state, "blown")
+        restored = Circuit.from_dict(circuit.to_dict())
+        self.assertTrue(restored.get(lamp.label).get_prop("blown"))
+
+        short_circuit = Circuit()
+        battery = short_circuit.add(Battery(0, 0, ri=0.1))
+        short_circuit.add_wire([(-20, 0), (20, 0)])
+        short_solution = SimulationEngine(short_circuit).recompute()
+        self.assertTrue(battery.get_prop("blown"))
+        self.assertEqual(short_solution.branches[battery.label].state, "blown")
+
+    def test_project_is_saved_as_styled_voltforge_archive(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        window.circuit.add(Resistor(0, 0, label="R_ARCHIVE"))
+        window._circuit_changed()
+        with TemporaryDirectory() as temp:
+            path = Path(temp) / "mon-circuit.voltforge"
+            self.assertTrue(window._write_project(path))
+            self.assertFalse(window.is_dirty)
+            self.assertTrue(zipfile.is_zipfile(path))
+            with zipfile.ZipFile(path) as archive:
+                self.assertEqual(
+                    set(archive.namelist()), {"manifest.txt", "circuit.vfdata"}
+                )
+                self.assertIn(
+                    "VoltForge project",
+                    archive.read("manifest.txt").decode("utf-8"),
+                )
+            with patch(
+                "ui.main_window.QFileDialog.getOpenFileName",
+                return_value=(str(path), ""),
+            ):
+                window.open_project()
+            self.assertEqual([c.label for c in window.circuit.components],
+                             ["R_ARCHIVE"])
+            self.assertFalse(window.is_dirty)
+
+    def test_resistor_sizer_recommends_safe_series_resistance(self) -> None:
+        dialog = ResistorSizerDialog()
+        dialog.source_voltage.setText("12 V")
+        dialog.load_voltage.setText("5 V")
+        dialog.load_current.setText("300 mA")
+        dialog.calculate()
+        self.assertIn("23.33 Ω", dialog.result.text())
+        self.assertIn("27 Ω", dialog.result.text())
+        self.assertIn("5 W", dialog.result.text())
+        dialog.close()
+
+    def test_dirty_close_offers_save_discard_or_cancel(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        window.is_dirty = True
+        with patch(
+            "ui.main_window.QMessageBox.exec",
+            return_value=QMessageBox.StandardButton.Cancel,
+        ):
+            self.assertFalse(window.close())
+        self.assertTrue(window.is_dirty)
+        with patch(
+            "ui.main_window.QMessageBox.exec",
+            return_value=QMessageBox.StandardButton.Discard,
+        ):
+            self.assertTrue(window.close())
+
+    def test_repair_button_resets_blown_component(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        lamp = window.circuit.add(Lamp(0, 0, blown=True))
+        window.engine.recompute()
+        window.canvas.set_selection(lamp)
+        window.refresh_inspector()
+        self.assertFalse(window.repair_button.isHidden())
+        window.repair_button.click()
+        self.assertFalse(lamp.get_prop("blown"))
+        self.assertTrue(window.repair_button.isHidden())
 
 
 if __name__ == "__main__":

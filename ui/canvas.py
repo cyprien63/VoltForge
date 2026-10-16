@@ -32,6 +32,7 @@ from core.components import (
     Voltmeter,
     Wire,
     create_component,
+    rotate_offset,
     snap,
 )
 from core.simulation import SimulationEngine
@@ -65,18 +66,36 @@ class CircuitCanvas(QWidget):
         self._preview_pos = (0, 0)
         self._preview_rotation = 0
         self.selected: Optional[object] = None
+        self.selected_items: list[object] = []
         self._origin = QPointF(0, 0)
+        self._view_touched = False
         self.zoom = 1.0
         self._panning = False
+        self._space_down = False
         self._pan_start = QPointF()
         self._pan_origin_start = QPointF()
         self._drag_offset = QPointF(0, 0)
         self._dragging = False
+        self._drag_moved = False
         self._drag_start = (0, 0)
+        self._drag_component_origin: Optional[tuple[float, float]] = None
         self._drag_terminals: dict[str, tuple[int, int]] = {}
         self._drag_wires: list[tuple[Wire, list[tuple[int, int]]]] = []
         self._drag_wire_points: Optional[list[tuple[int, int]]] = None
         self._drag_wire_endpoint: Optional[int] = None
+        self._drag_arrow_part: Optional[str] = None
+        self._drag_arrow_start_scene = (0.0, 0.0)
+        self._drag_arrow_start_offset = 0.0
+        self._drag_arrow_start_label_offset = (0.0, 0.0)
+        self._marquee_start: Optional[QPointF] = None
+        self._marquee_end: Optional[QPointF] = None
+        self._group_drag_start: Optional[tuple[float, float]] = None
+        self._group_component_origins: dict[Component, tuple[float, float]] = {}
+        self._group_wire_origins: dict[Wire, list[tuple[int, int]]] = {}
+        self._group_arrow_origins: dict[
+            VoltageArrow, tuple[tuple[int, int], tuple[int, int]]
+        ] = {}
+        self.theme = "dark"
         self._wire_start: Optional[tuple[int, int]] = None
         self._wire_preview_end: Optional[tuple[int, int]] = None
         self._wire_snap_target: Optional[tuple[int, int]] = None
@@ -103,8 +122,9 @@ class CircuitCanvas(QWidget):
             else Qt.CursorShape.ArrowCursor
         )
         self.statusMessage.emit({
-            "select": "Sélection : glisser pour déplacer ; R tourne ; Delete supprime. "
-                      "Molette = zoom, bouton milieu = déplacement de la vue.",
+            "select": "Sélection : glissez sur le vide pour sélectionner plusieurs éléments "
+                      "(Ctrl+A = tout) ; glissez la sélection pour la déplacer. "
+                      "Espace + glisser ou bouton milieu = déplacer la vue.",
             "wire": "Fil continu : cliquez les points du trajet ; le cercle vert indique l'accrochage. Clic droit ou Échap termine.",
             "voltage": "Flèche U : cliquez deux bornes ou nœuds ; l'aperçu jaune montre le sens avant validation.",
             "place": "Aperçu avant pose — R tourne le composant, cliquez pour le placer.",
@@ -114,11 +134,37 @@ class CircuitCanvas(QWidget):
 
     def set_selection(self, item: Optional[object]) -> None:
         self.selected = item
+        self.selected_items = [item] if item is not None else []
         self.selectionChanged.emit(item)
         self.update()
 
+    def set_selections(self, items: list[object]) -> None:
+        unique = list(dict.fromkeys(items))
+        self.selected_items = unique
+        self.selected = unique[-1] if unique else None
+        self.selectionChanged.emit(
+            unique if len(unique) > 1 else (unique[0] if unique else None)
+        )
+        self.update()
+
+    def set_theme(self, theme: str) -> None:
+        self.theme = theme
+        if theme == "light":
+            self.BACKGROUND = QColor("#f7fafc")
+            self.GRID_COLOR = QColor("#d7e0e8")
+            self.WIRE_COLOR = QColor("#374957")
+            self.COMPONENT_COLOR = QColor("#172b3a")
+            self.ACCENT = QColor("#00836f")
+        else:
+            self.BACKGROUND = QColor("#101820")
+            self.GRID_COLOR = QColor("#26343e")
+            self.WIRE_COLOR = QColor("#c6d1d8")
+            self.COMPONENT_COLOR = QColor("#f4f7f8")
+            self.ACCENT = QColor("#44d7b6")
+        self.update()
+
     def resizeEvent(self, event) -> None:
-        if self._origin == QPointF(0, 0):
+        if not self._view_touched:
             self._origin = QPointF(self.width() / 2, self.height() / 2)
         super().resizeEvent(event)
 
@@ -147,12 +193,14 @@ class CircuitCanvas(QWidget):
         if draw_grid:
             self._draw_grid(painter, width, height)
         self._draw_wires(painter)
-        if self.show_node_labels or self.show_meshes:
+        if self.show_meshes:
             self._draw_topology(painter)
         for component in self.circuit.components:
             self._draw_component(painter, component)
         if self.show_meshes:
             self._draw_mesh_badges(painter)
+        if self.show_node_labels:
+            self._draw_node_labels(painter)
         self._draw_preview(painter)
         self._draw_arrows(painter)
         if self._wire_start is not None:
@@ -181,6 +229,22 @@ class CircuitCanvas(QWidget):
                     painter, self._arrow_start, self._arrow_preview_end,
                     "Uab", QColor("#ffc857"), dashed=True,
                 )
+        if self._marquee_start is not None and self._marquee_end is not None:
+            start = QPointF(
+                self._origin.x() + self._marquee_start.x() * self.zoom,
+                self._origin.y() + self._marquee_start.y() * self.zoom,
+            )
+            end = QPointF(
+                self._origin.x() + self._marquee_end.x() * self.zoom,
+                self._origin.y() + self._marquee_end.y() * self.zoom,
+            )
+            rect = QRectF(start, end).normalized()
+            painter.resetTransform()
+            painter.setPen(QPen(self.ACCENT, 1.5, Qt.PenStyle.DashLine))
+            painter.setBrush(QColor(self.ACCENT.red(), self.ACCENT.green(),
+                                    self.ACCENT.blue(), 36))
+            painter.drawRect(rect)
+        self._draw_topology_counter(painter, width)
         painter.restore()
 
     def _draw_topology(self, painter: QPainter) -> None:
@@ -209,17 +273,44 @@ class CircuitCanvas(QWidget):
                         for point in wire.points[1:]:
                             path.lineTo(QPointF(*point))
                         painter.drawPath(path)
-        if self.show_node_labels:
-            painter.setFont(self.font())
-            for node in self.circuit.nodes.values():
-                painter.setPen(QPen(QColor("#101820"), 1))
-                painter.setBrush(QColor("#66d9ef"))
-                painter.drawEllipse(QPointF(node.x, node.y), 5.5, 5.5)
-                painter.setPen(QPen(QColor("#101820"), 1))
-                painter.drawText(QRectF(node.x + 7, node.y - 17, 38, 18),
-                                 Qt.AlignmentFlag.AlignLeft |
-                                 Qt.AlignmentFlag.AlignVCenter, node.name)
         painter.restore()
+
+    def _draw_node_labels(self, painter: QPainter) -> None:
+        painter.save()
+        painter.setFont(self.font())
+        for node in self.circuit.nodes.values():
+            painter.setPen(QPen(self.BACKGROUND, 1))
+            painter.setBrush(QColor("#63c9e8"))
+            painter.drawEllipse(QPointF(node.x, node.y), 5.5, 5.5)
+            label_rect = QRectF(node.x + 7, node.y - 18, 38, 18)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(self.BACKGROUND)
+            painter.drawRoundedRect(label_rect.adjusted(-2, -1, 2, 1), 3, 3)
+            painter.setPen(QPen(self.COMPONENT_COLOR, 1))
+            painter.drawText(label_rect, Qt.AlignmentFlag.AlignLeft |
+                             Qt.AlignmentFlag.AlignVCenter, node.name)
+        painter.restore()
+
+    def _draw_topology_counter(self, painter: QPainter, width: int) -> None:
+        text = self._topology_counter_text()
+        painter.save()
+        painter.resetTransform()
+        painter.setFont(self.font())
+        rect = QRectF(12, 12, min(width - 24, 260), 30)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(self.BACKGROUND.red(), self.BACKGROUND.green(),
+                                self.BACKGROUND.blue(), 225))
+        painter.drawRoundedRect(rect, 7, 7)
+        painter.setPen(QPen(self.COMPONENT_COLOR, 1))
+        painter.drawText(rect.adjusted(9, 0, -6, 0),
+                         Qt.AlignmentFlag.AlignVCenter, text)
+        painter.restore()
+
+    def _topology_counter_text(self) -> str:
+        return (
+            f"Nœuds : {len(self.circuit.nodes)}   ·   "
+            f"Mailles : {self.circuit.mesh_count()}"
+        )
 
     @staticmethod
     def _mesh_colors() -> tuple[QColor, ...]:
@@ -305,8 +396,9 @@ class CircuitCanvas(QWidget):
     def _draw_wires(self, painter: QPainter) -> None:
         painter.save()
         for wire in self.circuit.wires:
-            color = self.ACCENT if wire is self.selected else self.WIRE_COLOR
-            width = 3.2 if wire is self.selected else 2.2
+            selected = wire in self.selected_items
+            color = self.ACCENT if selected else self.WIRE_COLOR
+            width = 3.2 if selected else 2.2
             painter.setPen(QPen(color, width, Qt.PenStyle.SolidLine,
                                 Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
             path = QPainterPath(QPointF(*wire.points[0]))
@@ -318,7 +410,7 @@ class CircuitCanvas(QWidget):
                 if self.circuit.degree(node_id) >= 3:
                     painter.setBrush(self.WIRE_COLOR)
                     painter.drawEllipse(QPointF(x, y), 3.5, 3.5)
-            if wire is self.selected:
+            if selected:
                 painter.setPen(QPen(self.ACCENT, 1.5))
                 painter.setBrush(self.BACKGROUND)
                 for point in (wire.points[0], wire.points[-1]):
@@ -330,6 +422,8 @@ class CircuitCanvas(QWidget):
         color = self.COMPONENT_COLOR
         if result and result.state in ("power", "fault", "error"):
             color = QColor("#ff6978" if result.state != "power" else "#ffc857")
+        elif comp.get_prop("blown"):
+            color = QColor("#ff6978")
         elif result and result.state == "disconnected":
             color = QColor("#9ba8b0")
         if isinstance(comp, Led) and comp.on:
@@ -343,6 +437,10 @@ class CircuitCanvas(QWidget):
         painter.setBrush(self.BACKGROUND)
         self._draw_leads(painter, comp)
         self._draw_symbol(painter, comp)
+        if comp.get_prop("blown"):
+            painter.setPen(QPen(QColor("#ff6978"), 2.5))
+            painter.drawLine(-8, -8, 8, 8)
+            painter.drawLine(-8, 8, 8, -8)
         painter.setFont(default_font)
         painter.setPen(QPen(color, 1.4))
         painter.drawText(QRectF(-52, 29, 104, 18), Qt.AlignmentFlag.AlignCenter,
@@ -352,12 +450,32 @@ class CircuitCanvas(QWidget):
             painter.setPen(QPen(QColor("#aabac4"), 1))
             painter.drawText(QRectF(-66, -43, 132, 16), Qt.AlignmentFlag.AlignCenter,
                              value)
-        if self.selected is comp:
+        if comp in self.selected_items:
             painter.setPen(QPen(self.ACCENT, 1.5, Qt.PenStyle.DashLine))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(QRectF(-48, -31, 96, 68), 8, 8)
         if result and abs(result.i) > 1e-6:
             self._draw_current(painter, comp, result.i)
+        painter.restore()
+
+    @staticmethod
+    def _draw_polarities(painter: QPainter, comp: Component,
+                         color: QColor) -> None:
+        if isinstance(comp, Battery):
+            return
+        terminals = comp.TERMINAL_OFFSETS
+        if "p" not in terminals or "n" not in terminals:
+            return
+        painter.save()
+        font = painter.font()
+        font.setBold(True)
+        font.setPointSize(9)
+        painter.setFont(font)
+        painter.setPen(QPen(color, 1))
+        for name, mark in (("p", "+"), ("n", "−")):
+            x, y = terminals[name]
+            painter.drawText(QRectF(x - 6, y + 3, 12, 13),
+                             Qt.AlignmentFlag.AlignCenter, mark)
         painter.restore()
 
     def _draw_symbol(self, painter: QPainter, comp: Component) -> None:
@@ -462,6 +580,7 @@ class CircuitCanvas(QWidget):
             painter.setFont(font)
             painter.drawText(QRectF(-13, -12, 26, 24),
                              Qt.AlignmentFlag.AlignCenter, symbol)
+        self._draw_polarities(painter, comp, self.COMPONENT_COLOR)
 
     def _draw_current(self, painter: QPainter, comp: Component, current: float) -> None:
         direction = 1 if current >= 0 else -1
@@ -479,8 +598,37 @@ class CircuitCanvas(QWidget):
             self._draw_voltage_arrow(
                 painter, arrow.start, arrow.end,
                 arrow.text(self.engine.solution), color,
+                offset=arrow.offset, label_offset=arrow.label_offset,
             )
         painter.restore()
+
+    @staticmethod
+    def _arrow_line(start: tuple[float, float], end: tuple[float, float],
+                    offset: float) -> tuple[tuple[float, float],
+                                            tuple[float, float],
+                                            tuple[float, float]]:
+        dx, dy = end[0] - start[0], end[1] - start[1]
+        length = math.hypot(dx, dy)
+        if length < 1:
+            return start, end, (0.0, 0.0)
+        normal = (-dy / length, dx / length)
+        shift = (normal[0] * offset, normal[1] * offset)
+        return (
+            (start[0] + shift[0], start[1] + shift[1]),
+            (end[0] + shift[0], end[1] + shift[1]),
+            normal,
+        )
+
+    @staticmethod
+    def _arrow_label_rect(arrow: VoltageArrow, label: str) -> QRectF:
+        first, last, _ = CircuitCanvas._arrow_line(
+            arrow.start, arrow.end, arrow.offset
+        )
+        text_width = max(58.0, min(190.0, len(label) * 8.5))
+        center_x = (first[0] + last[0]) / 2 + arrow.label_offset[0]
+        center_y = (first[1] + last[1]) / 2 + arrow.label_offset[1]
+        return QRectF(center_x - text_width / 2, center_y - 9,
+                      text_width, 18)
 
     @staticmethod
     def _draw_voltage_arrow(
@@ -490,16 +638,15 @@ class CircuitCanvas(QWidget):
         label: str,
         color: QColor,
         dashed: bool = False,
+        offset: float = 24.0,
+        label_offset: tuple[float, float] = (0.0, -20.0),
     ) -> None:
         dx, dy = end[0] - start[0], end[1] - start[1]
         length = math.hypot(dx, dy)
         if length < 1:
             return
         ux, uy = dx / length, dy / length
-        offset = min(24.0, length * 0.25)
-        ox, oy = -uy * offset, ux * offset
-        first = (start[0] + ox, start[1] + oy)
-        last = (end[0] + ox, end[1] + oy)
+        first, last, _ = CircuitCanvas._arrow_line(start, end, offset)
         style = Qt.PenStyle.DashLine if dashed else Qt.PenStyle.SolidLine
         painter.save()
         painter.setPen(QPen(QColor(color.red(), color.green(), color.blue(), 170),
@@ -518,14 +665,12 @@ class CircuitCanvas(QWidget):
                     last[1] - 10 * math.sin(angle + wing),
                 ),
             )
-        painter.setPen(QPen(color, 1.2))
-        painter.setBrush(QColor("#101820"))
-        painter.drawEllipse(QPointF(*start), 4, 4)
-        painter.drawEllipse(QPointF(*end), 4, 4)
         text_width = max(58.0, min(190.0, len(label) * 8.5))
+        text_center_x = (first[0] + last[0]) / 2 + label_offset[0]
+        text_center_y = (first[1] + last[1]) / 2 + label_offset[1]
         text_rect = QRectF(
-            (first[0] + last[0]) / 2 - text_width / 2,
-            (first[1] + last[1]) / 2 - 20,
+            text_center_x - text_width / 2,
+            text_center_y - 9,
             text_width,
             18,
         )
@@ -538,7 +683,13 @@ class CircuitCanvas(QWidget):
 
     def _item_at(self, x: int, y: int):
         for arrow in reversed(self.circuit.arrows):
-            if self._distance_to_segment(x, y, arrow.start, arrow.end) <= 36 / self.zoom:
+            label = arrow.text(self.engine.solution)
+            if self._arrow_label_rect(arrow, label).contains(QPointF(x, y)):
+                return arrow
+            first, last, _ = self._arrow_line(
+                arrow.start, arrow.end, arrow.offset
+            )
+            if self._distance_to_segment(x, y, first, last) <= 12 / self.zoom:
                 return arrow
         for comp in reversed(self.circuit.components):
             dx, dy = x - comp.x, y - comp.y
@@ -565,8 +716,16 @@ class CircuitCanvas(QWidget):
         return math.hypot(x - ax - t * dx, y - ay - t * dy)
 
     def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._space_down:
+            self._panning = True
+            self._view_touched = True
+            self._pan_start = event.position()
+            self._pan_origin_start = QPointF(self._origin)
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            return
         if event.button() == Qt.MouseButton.MiddleButton:
             self._panning = True
+            self._view_touched = True
             self._pan_start = event.position()
             self._pan_origin_start = QPointF(self._origin)
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
@@ -667,11 +826,58 @@ class CircuitCanvas(QWidget):
             self.update()
             return
         item = self._item_at(raw_x, raw_y)
-        self.set_selection(item)
+        additive = bool(event.modifiers() & (
+            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
+        ))
+        if item is None:
+            self._marquee_start = QPointF(raw_x, raw_y)
+            self._marquee_end = QPointF(raw_x, raw_y)
+            if not additive:
+                self.set_selections([])
+            return
+        if additive:
+            selected = list(self.selected_items)
+            if item in selected:
+                selected.remove(item)
+            else:
+                selected.append(item)
+            self.set_selections(selected)
+            if item not in self.selected_items:
+                return
+        elif item not in self.selected_items:
+            self.set_selection(item)
+
+        if len(self.selected_items) > 1:
+            self._dragging = True
+            self._group_drag_start = (raw_x, raw_y)
+            self._group_component_origins = {
+                selected: selected.position
+                for selected in self.selected_items
+                if isinstance(selected, Component)
+            }
+            self._group_arrow_origins = {
+                selected: (selected.start, selected.end)
+                for selected in self.selected_items
+                if isinstance(selected, VoltageArrow)
+            }
+            self._group_wire_origins = {
+                wire: list(wire.points)
+                for wire in self.circuit.wires
+                if wire in self.selected_items or any(
+                    point in {
+                        (snap(tx), snap(ty))
+                        for component in self._group_component_origins
+                        for tx, ty in component.terminal_positions().values()
+                    }
+                    for point in wire.points
+                )
+            }
+            return
         if isinstance(item, Component):
             self._dragging = True
             self._drag_offset = QPointF(x - item.x, y - item.y)
             self._drag_start = (x, y)
+            self._drag_component_origin = item.position
             self._drag_terminals = {
                 name: (snap(tx), snap(ty))
                 for name, (tx, ty) in item.terminal_positions().items()
@@ -682,6 +888,17 @@ class CircuitCanvas(QWidget):
                 for wire in self.circuit.wires
                 if any(point in terminal_points for point in wire.points)
             ]
+        elif isinstance(item, VoltageArrow):
+            self._dragging = True
+            raw_pos = (raw_x, raw_y)
+            self._drag_arrow_start_scene = raw_pos
+            label = item.text(self.engine.solution)
+            if self._arrow_label_rect(item, label).contains(QPointF(raw_x, raw_y)):
+                self._drag_arrow_part = "label"
+                self._drag_arrow_start_label_offset = item.label_offset
+            else:
+                self._drag_arrow_part = "line"
+                self._drag_arrow_start_offset = item.offset
         elif isinstance(item, Wire):
             self._dragging = True
             self._drag_start = (x, y)
@@ -734,8 +951,40 @@ class CircuitCanvas(QWidget):
             self._origin = self._pan_origin_start + delta
             self.update()
             return
-        if self._dragging and isinstance(self.selected, Component):
+        if self._dragging and self._group_drag_start is not None:
+            raw_x, raw_y = self.scene_float_pos(event.position())
+            dx = snap(raw_x - self._group_drag_start[0])
+            dy = snap(raw_y - self._group_drag_start[1])
+            self._drag_moved = self._drag_moved or bool(dx or dy)
+            self._move_group(dx, dy)
+            self.circuit.recompute_nodes()
+            self.update()
+        elif self._dragging and isinstance(self.selected, VoltageArrow):
+            raw_x, raw_y = self.scene_float_pos(event.position())
+            delta_x = raw_x - self._drag_arrow_start_scene[0]
+            delta_y = raw_y - self._drag_arrow_start_scene[1]
+            self._drag_moved = self._drag_moved or bool(delta_x or delta_y)
+            if self._drag_arrow_part == "label":
+                self.selected.label_offset = (
+                    self._drag_arrow_start_label_offset[0] + delta_x,
+                    self._drag_arrow_start_label_offset[1] + delta_y,
+                )
+            else:
+                _, _, normal = self._arrow_line(
+                    self.selected.start, self.selected.end, 0.0
+                )
+                self.selected.offset = max(
+                    -300.0,
+                    min(300.0, self._drag_arrow_start_offset +
+                        delta_x * normal[0] + delta_y * normal[1]),
+                )
+            self.update()
+        elif self._dragging and isinstance(self.selected, Component):
             x, y = self.scene_pos(event.position())
+            self._drag_moved = self._drag_moved or (
+                x - self._drag_offset.x() != self.selected.x
+                or y - self._drag_offset.y() != self.selected.y
+            )
             self.selected.move_to(x - self._drag_offset.x(),
                                   y - self._drag_offset.y())
             moved_terminals = {
@@ -746,16 +995,31 @@ class CircuitCanvas(QWidget):
                 self._drag_terminals[name]: moved_terminals[name]
                 for name in self._drag_terminals
             }
+            dx = self.selected.x - self._drag_component_origin[0]
+            dy = self.selected.y - self._drag_component_origin[1]
             for wire, original_points in self._drag_wires:
-                wire.points = [
-                    moved_by_terminal.get(point, point) for point in original_points
-                ]
+                attached = {
+                    point for point in self._drag_terminals.values()
+                    if point in original_points
+                }
+                if len(attached) >= 2:
+                    wire.points = [(px + dx, py + dy)
+                                   for px, py in original_points]
+                else:
+                    wire.points = [
+                        moved_by_terminal.get(point, point)
+                        for point in original_points
+                    ]
                 wire.points = self._orthogonalize(wire.points)
             self.circuit.recompute_nodes()
             self.update()
         elif self._dragging and isinstance(self.selected, Wire) and \
                 self._drag_wire_points is not None:
             raw_x, raw_y = self.scene_float_pos(event.position())
+            self._drag_moved = self._drag_moved or (
+                (snap(raw_x) != self._drag_start[0])
+                or (snap(raw_y) != self._drag_start[1])
+            )
             if self._drag_wire_endpoint is not None:
                 self._wire_snap_target = self._snap_target(raw_x, raw_y)
                 points = list(self._drag_wire_points)
@@ -779,6 +1043,9 @@ class CircuitCanvas(QWidget):
                 ]
             self.circuit.recompute_nodes()
             self.update()
+        elif self._marquee_start is not None:
+            self._marquee_end = QPointF(*self.scene_float_pos(event.position()))
+            self.update()
         elif self.mode == "place":
             self._preview_pos = self.scene_pos(event.position())
             self.update()
@@ -798,8 +1065,57 @@ class CircuitCanvas(QWidget):
             self.update()
         super().mouseMoveEvent(event)
 
+    def _move_group(self, dx: int, dy: int) -> None:
+        for component, (x, y) in self._group_component_origins.items():
+            component.move_to(x + dx, y + dy)
+        moved_terminals = {}
+        for component, (x, y) in self._group_component_origins.items():
+            original = component.TERMINAL_OFFSETS
+            for name, (ox, oy) in original.items():
+                rx, ry = rotate_offset(ox, oy, component.rotation)
+                current = (snap(x + rx), snap(y + ry))
+                moved_terminals[current] = (current[0] + dx, current[1] + dy)
+        for wire, points in self._group_wire_origins.items():
+            if wire in self.selected_items:
+                wire.points = [(x + dx, y + dy) for x, y in points]
+                continue
+            attached = {point for point in points if point in moved_terminals}
+            if len(attached) >= 2:
+                wire.points = [(x + dx, y + dy) for x, y in points]
+            elif attached:
+                wire.points = [
+                    moved_terminals.get(point, point) for point in points
+                ]
+        for arrow, (start, end) in self._group_arrow_origins.items():
+            arrow.start = (start[0] + dx, start[1] + dy)
+            arrow.end = (end[0] + dx, end[1] + dy)
+
+    def _items_in_rect(self, rect: QRectF) -> list[object]:
+        found: list[object] = []
+        for component in self.circuit.components:
+            bounds = QRectF(component.x - 30, component.y - 30, 60, 60)
+            if rect.intersects(bounds):
+                found.append(component)
+        for wire in self.circuit.wires:
+            if any(rect.contains(QPointF(*point)) for point in wire.points) or any(
+                rect.intersects(QRectF(QPointF(*start), QPointF(*end))
+                                .normalized().adjusted(-2, -2, 2, 2))
+                for start, end in zip(wire.points, wire.points[1:])
+            ):
+                found.append(wire)
+        for arrow in self.circuit.arrows:
+            label = arrow.text(self.engine.solution)
+            line_rect = QRectF(QPointF(*arrow.start),
+                               QPointF(*arrow.end)).normalized()
+            if rect.intersects(self._arrow_label_rect(arrow, label)) or \
+                    rect.intersects(line_rect.adjusted(-2, -2, 2, 2)):
+                found.append(arrow)
+        return found
+
     def mouseReleaseEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.MiddleButton and self._panning:
+        if event.button() in (
+            Qt.MouseButton.MiddleButton, Qt.MouseButton.LeftButton
+        ) and self._panning:
             self._panning = False
             self.setCursor(
                 Qt.CursorShape.CrossCursor
@@ -807,15 +1123,36 @@ class CircuitCanvas(QWidget):
                 else Qt.CursorShape.ArrowCursor
             )
             return
+        if event.button() == Qt.MouseButton.LeftButton and \
+                self._marquee_start is not None:
+            raw_x, raw_y = self.scene_float_pos(event.position())
+            rect = QRectF(self._marquee_start, QPointF(raw_x, raw_y)).normalized()
+            items = self._items_in_rect(rect)
+            if event.modifiers() & (
+                Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
+            ):
+                items = list(dict.fromkeys([*self.selected_items, *items]))
+            self._marquee_start = None
+            self._marquee_end = None
+            self.set_selections(items)
+            return
         if event.button() == Qt.MouseButton.LeftButton and self._dragging:
             self._dragging = False
-            self.engine.recompute()
-            self.circuitChanged.emit()
+            if self._drag_moved:
+                self.engine.recompute()
+                self.circuitChanged.emit()
+            self._drag_moved = False
             self._drag_wires = []
             self._drag_terminals = {}
             self._drag_wire_points = None
             self._drag_wire_endpoint = None
             self._wire_snap_target = None
+            self._drag_arrow_part = None
+            self._drag_component_origin = None
+            self._group_drag_start = None
+            self._group_component_origins = {}
+            self._group_wire_origins = {}
+            self._group_arrow_origins = {}
 
     def wheelEvent(self, event) -> None:
         old_zoom = self.zoom
@@ -825,6 +1162,7 @@ class CircuitCanvas(QWidget):
         cursor = event.position()
         scene_x, scene_y = self.scene_float_pos(cursor)
         self.zoom = new_zoom
+        self._view_touched = True
         self._origin = QPointF(
             cursor.x() - scene_x * new_zoom,
             cursor.y() - scene_y * new_zoom,
@@ -843,6 +1181,18 @@ class CircuitCanvas(QWidget):
             self.statusMessage.emit(f"Composant sélectionné : {item.label}")
 
     def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space_down = True
+            if not self._panning:
+                self.setCursor(Qt.CursorShape.OpenHandCursor)
+            return
+        if event.key() == Qt.Key.Key_A and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self.set_selections([
+                *self.circuit.components,
+                *self.circuit.wires,
+                *self.circuit.arrows,
+            ])
+            return
         if event.key() == Qt.Key.Key_Escape and self.mode in ("wire", "voltage"):
             self._wire_start = None
             self._wire_preview_end = None
@@ -860,19 +1210,31 @@ class CircuitCanvas(QWidget):
         else:
             super().keyPressEvent(event)
 
+    def keyReleaseEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space_down = False
+            if not self._panning:
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+            return
+        super().keyReleaseEvent(event)
+
     def rotate_preview(self) -> None:
         if self._preview_component is not None:
             self._preview_rotation = (self._preview_rotation + 90) % 360
             self.update()
 
     def _delete_selected(self) -> None:
-        if self.selected is None:
+        selected_items = list(self.selected_items)
+        if not selected_items and self.selected is not None:
+            selected_items = [self.selected]
+        if not selected_items:
             return
-        if isinstance(self.selected, VoltageArrow):
-            self.circuit.remove_arrow(self.selected)
-        else:
-            self.circuit.remove(getattr(self.selected, "label", ""))
-        self.set_selection(None)
+        for item in selected_items:
+            if isinstance(item, VoltageArrow):
+                self.circuit.remove_arrow(item)
+            else:
+                self.circuit.remove(getattr(item, "label", ""))
+        self.set_selections([])
         self.engine.recompute()
         self.circuitChanged.emit()
 
@@ -896,9 +1258,22 @@ class CircuitCanvas(QWidget):
             old_terminals[name]: new_terminals[name] for name in old_terminals
         }
         for wire, points in attached_wires:
-            wire.points = self._orthogonalize(
-                [moved_by_terminal.get(point, point) for point in points]
-            )
+            attached = {point for point in terminal_points if point in points}
+            if len(attached) >= 2:
+                wire.points = [
+                    tuple(
+                        snap(origin + rotated)
+                        for origin, rotated in zip(
+                            (component.x, component.y),
+                            rotate_offset(px - component.x, py - component.y, delta),
+                        )
+                    )
+                    for px, py in points
+                ]
+            else:
+                wire.points = self._orthogonalize(
+                    [moved_by_terminal.get(point, point) for point in points]
+                )
         self.circuit.recompute_nodes()
         self.engine.recompute()
         self.circuitChanged.emit()

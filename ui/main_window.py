@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import io
+import math
 from pathlib import Path
 import sys
+import zipfile
 
-from PyQt6.QtCore import QPointF, QSize, Qt, QTimer
+from PyQt6.QtCore import QPointF, QSize, Qt, QTimer, QSettings
 from PyQt6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -192,6 +195,86 @@ class OhmCalculatorDialog(QDialog):
             self.result.setText(str(exc))
 
 
+class ResistorSizerDialog(QDialog):
+    """Size a series resistor to keep a load within its nominal rating."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Calculer une résistance de protection")
+        self.setMinimumWidth(420)
+        form = QFormLayout(self)
+        self.source_voltage = QLineEdit()
+        self.source_voltage.setPlaceholderText("ex. 12 V")
+        self.load_voltage = QLineEdit()
+        self.load_voltage.setPlaceholderText("ex. 5 V")
+        self.load_current = QLineEdit()
+        self.load_current.setPlaceholderText("ex. 300 mA")
+        self.load_power = QLineEdit()
+        self.load_power.setPlaceholderText("ex. 1,5 W (facultatif)")
+        self.load_current.textChanged.connect(
+            lambda value: self.load_power.setEnabled(not value.strip())
+        )
+        self.load_power.textChanged.connect(
+            lambda value: self.load_current.setEnabled(not value.strip())
+        )
+        form.addRow("Tension de la source", self.source_voltage)
+        form.addRow("Tension nominale du récepteur", self.load_voltage)
+        form.addRow("Courant nominal du récepteur", self.load_current)
+        form.addRow("ou puissance nominale", self.load_power)
+        self.result = QLabel("Renseignez les caractéristiques nominales du récepteur.")
+        self.result.setWordWrap(True)
+        form.addRow(self.result)
+        calculate = QPushButton("Calculer")
+        calculate.clicked.connect(self.calculate)
+        form.addRow(calculate)
+
+    @staticmethod
+    def _next_e12(value: float) -> float:
+        if value <= 0:
+            return 0.0
+        base = 10 ** math.floor(math.log10(value))
+        for coefficient in (1.0, 1.2, 1.5, 1.8, 2.2, 2.7, 3.3,
+                            3.9, 4.7, 5.6, 6.8, 8.2, 10.0):
+            candidate = coefficient * base
+            if candidate >= value:
+                return candidate
+        return 10 * base
+
+    def calculate(self) -> None:
+        try:
+            source = parse_value(self.source_voltage.text())
+            load = parse_value(self.load_voltage.text())
+            current_text = self.load_current.text().strip()
+            power_text = self.load_power.text().strip()
+            if bool(current_text) == bool(power_text):
+                raise ValueError("Renseignez soit le courant, soit la puissance nominale.")
+            if source <= 0 or load <= 0 or source < load:
+                raise ValueError("La tension source doit être au moins égale à la tension nominale.")
+            current = (
+                parse_value(current_text)
+                if current_text else parse_value(power_text) / load
+            )
+            if current <= 0:
+                raise ValueError("Le courant nominal doit être positif.")
+            theoretical = (source - load) / current
+            resistance = self._next_e12(theoretical)
+            resistor_power = current * current * resistance
+            safe_power = next(
+                (rating for rating in (0.25, 0.5, 1, 2, 5, 10, 25, 50, 100, 250, 500)
+                 if rating >= resistor_power * 2),
+                resistor_power * 2,
+            )
+            self.result.setText(
+                f"Courant utilisé : {current:.4g} A\n"
+                f"Résistance théorique : {theoretical:.4g} Ω\n"
+                f"Valeur normalisée conseillée : {resistance:.4g} Ω\n"
+                f"Puissance dissipée : {resistor_power:.4g} W — "
+                f"choisissez une résistance d'au moins {safe_power:g} W."
+            )
+        except (ValueError, ZeroDivisionError) as exc:
+            self.result.setText(str(exc))
+
+
 class MainWindow(QMainWindow):
     """Window for circuit authoring, simulation, and export."""
 
@@ -253,22 +336,33 @@ class MainWindow(QMainWindow):
         self.engine = SimulationEngine(self.circuit)
         self.project_path: Path | None = None
         self.scenario_text = ""
+        self.is_dirty = False
+        self.theme = QSettings("VoltForge", "VoltForge").value("theme", "dark")
         self._play_timer = QTimer(self)
         self._play_timer.setInterval(20)
         self._play_timer.timeout.connect(self._advance_playback)
 
         self._create_menu()
         self._create_layout()
+        self.set_theme(self.theme)
         self.engine.recompute()
         self.refresh_inspector()
         self.refresh_results()
         self.statusBar().showMessage("Prêt — choisissez un outil et cliquez sur la grille.")
+        self._refresh_title()
+
+    def _scenario_text_changed(self, text: str) -> None:
+        if text != self.scenario_text:
+            self.scenario_text = text
+            self.is_dirty = True
+            self._refresh_title()
 
     def _create_menu(self) -> None:
         file_menu = self.menuBar().addMenu("Fichier")
         self._add_action(file_menu, "Nouveau", self.new_project, QKeySequence.StandardKey.New)
         self._add_action(file_menu, "Ouvrir…", self.open_project, QKeySequence.StandardKey.Open)
-        self._add_action(file_menu, "Enregistrer", self.save_project, QKeySequence.StandardKey.Save)
+        self._add_action(file_menu, "Enregistrer le projet", self.save_project,
+                         QKeySequence.StandardKey.Save)
         self._add_action(file_menu, "Enregistrer sous…", self.save_project_as)
         file_menu.addSeparator()
         export_menu = file_menu.addMenu("Exporter le schéma")
@@ -288,6 +382,8 @@ class MainWindow(QMainWindow):
         self._add_action(simulation_menu, "Recalculer", self.recompute)
         tools_menu = self.menuBar().addMenu("Outils")
         self._add_action(tools_menu, "Calculateur loi d'Ohm…", self.open_ohm_calculator)
+        self._add_action(tools_menu, "Calculer une résistance de protection…",
+                         self.open_resistor_sizer)
         view_menu = self.menuBar().addMenu("Affichage")
         self.node_labels_action = QAction("Afficher les nœuds A, B, C…", self)
         self.node_labels_action.setCheckable(True)
@@ -297,6 +393,20 @@ class MainWindow(QMainWindow):
         self.meshes_action.setCheckable(True)
         self.meshes_action.toggled.connect(self._toggle_meshes)
         view_menu.addAction(self.meshes_action)
+        view_menu.addSeparator()
+        theme_menu = view_menu.addMenu("Thème")
+        self.theme_group = QActionGroup(self)
+        self.theme_group.setExclusive(True)
+        for label, theme in (("Sombre", "dark"), ("Clair", "light")):
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setData(theme)
+            action.setChecked(theme == self.theme)
+            action.triggered.connect(
+                lambda checked, value=theme: self.set_theme(value) if checked else None
+            )
+            self.theme_group.addAction(action)
+            theme_menu.addAction(action)
 
     @staticmethod
     def _add_action(menu, text, callback, shortcut=None):
@@ -403,6 +513,10 @@ class MainWindow(QMainWindow):
         for button in (self.edit_button, self.rotate_button, self.delete_button):
             selection_buttons.addWidget(button)
         self.selection_layout.addLayout(selection_buttons)
+        self.repair_button = QPushButton("Réparer le composant")
+        self.repair_button.clicked.connect(self.repair_selected_component)
+        self.repair_button.hide()
+        self.selection_layout.addWidget(self.repair_button)
         self.switch_button = QPushButton()
         self.switch_button.clicked.connect(self.toggle_selected_switch)
         self.switch_button.hide()
@@ -443,6 +557,55 @@ class MainWindow(QMainWindow):
     def open_ohm_calculator(self) -> None:
         OhmCalculatorDialog(self).exec()
 
+    def open_resistor_sizer(self) -> None:
+        ResistorSizerDialog(self).exec()
+
+    def set_theme(self, theme: str) -> None:
+        self.theme = theme if theme == "light" else "dark"
+        if hasattr(self, "canvas"):
+            self.canvas.set_theme(self.theme)
+        if self.theme == "light":
+            self.setStyleSheet("""
+                QMainWindow, QWidget { background: #f1f5f9; color: #203040; }
+                QMenuBar, QMenu, QToolBar { background: #ffffff; color: #203040; }
+                QGroupBox { border: 1px solid #cbd5df; border-radius: 8px;
+                            margin-top: 10px; padding: 8px; }
+                QGroupBox::title { subcontrol-origin: margin; left: 10px;
+                                   padding: 0 4px; }
+                QPushButton, QToolButton { background: #ffffff; border: 1px solid #cbd5df;
+                                           border-radius: 6px; padding: 5px 8px; }
+                QPushButton:hover, QToolButton:hover { background: #e3f4f0; }
+                QLineEdit, QDoubleSpinBox, QSpinBox, QComboBox, QTableWidget {
+                    background: #ffffff; color: #203040; border: 1px solid #cbd5df;
+                    border-radius: 4px; padding: 3px;
+                }
+                QScrollArea { background: #ffffff; }
+            """)
+        else:
+            self.setStyleSheet("""
+                QMainWindow, QWidget { background: #17232d; color: #e6edf3; }
+                QMenuBar, QMenu, QToolBar { background: #202e39; color: #e6edf3; }
+                QGroupBox { border: 1px solid #3c4c59; border-radius: 8px;
+                            margin-top: 10px; padding: 8px; }
+                QGroupBox::title { subcontrol-origin: margin; left: 10px;
+                                   padding: 0 4px; }
+                QPushButton, QToolButton { background: #263744; border: 1px solid #455968;
+                                           border-radius: 6px; padding: 5px 8px; }
+                QPushButton:hover, QToolButton:hover { background: #344b5a; }
+                QLineEdit, QDoubleSpinBox, QSpinBox, QComboBox, QTableWidget {
+                    background: #101820; color: #e6edf3; border: 1px solid #455968;
+                    border-radius: 4px; padding: 3px;
+                }
+                QScrollArea { background: #17232d; }
+            """)
+        QSettings("VoltForge", "VoltForge").setValue("theme", self.theme)
+
+    def _refresh_title(self) -> None:
+        name = self.project_path.name if self.project_path else "Nouveau projet"
+        self.setWindowTitle(
+            f"{'* ' if self.is_dirty else ''}{name} — VoltForge"
+        )
+
     @staticmethod
     def _icon_path(filename: str) -> Path:
         base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
@@ -465,6 +628,8 @@ class MainWindow(QMainWindow):
         toolbar.addAction(action)
 
     def _circuit_changed(self) -> None:
+        self.is_dirty = True
+        self._refresh_title()
         self.refresh_inspector()
         self.refresh_results()
 
@@ -473,15 +638,28 @@ class MainWindow(QMainWindow):
 
     def refresh_inspector(self) -> None:
         item = self.canvas.selected
+        selected_count = len(self.canvas.selected_items)
+        if selected_count > 1:
+            self.selection_label.setText(
+                f"{selected_count} éléments sélectionnés\n"
+                "Faites glisser pour les déplacer ensemble ; Supprimer pour tout effacer."
+            )
+            self.edit_button.setEnabled(False)
+            self.rotate_button.setEnabled(False)
+            self.delete_button.setEnabled(True)
+            self.repair_button.hide()
+            self.switch_button.hide()
+            return
         if item is None:
             self.selection_label.setText(
                 f"{len(self.circuit.components)} composant(s), "
-                f"{len(self.circuit.wires)} fil(s), "
+                f"{len(self.circuit.wires)} fil(s), {len(self.circuit.nodes)} nœud(s), "
                 f"{self.circuit.mesh_count()} maille(s)"
             )
             self.edit_button.setEnabled(False)
             self.rotate_button.setEnabled(False)
             self.delete_button.setEnabled(False)
+            self.repair_button.hide()
             self.switch_button.hide()
             return
         if isinstance(item, Component):
@@ -509,6 +687,9 @@ class MainWindow(QMainWindow):
         self.edit_button.setEnabled(isinstance(item, Component))
         self.rotate_button.setEnabled(isinstance(item, Component))
         self.delete_button.setEnabled(True)
+        self.repair_button.setVisible(
+            isinstance(item, Component) and bool(item.get_prop("blown"))
+        )
         if isinstance(item, Switch):
             self.switch_button.setText(
                 "Ouvrir l'interrupteur" if item.closed
@@ -517,6 +698,17 @@ class MainWindow(QMainWindow):
             self.switch_button.show()
         else:
             self.switch_button.hide()
+
+    def repair_selected_component(self) -> None:
+        component = self.canvas.selected
+        if not isinstance(component, Component) or not component.get_prop("blown"):
+            return
+        component.set_prop("blown", False)
+        if hasattr(component, "tstate"):
+            component.tstate.clear()
+        self.circuit.recompute_nodes()
+        self.engine.recompute()
+        self._circuit_changed()
 
     def toggle_selected_switch(self) -> None:
         item = self.canvas.selected
@@ -596,79 +788,128 @@ class MainWindow(QMainWindow):
         self._circuit_changed()
 
     def delete_selected(self) -> None:
-        item = self.canvas.selected
-        if item is not None:
-            if isinstance(item, VoltageArrow):
-                self.circuit.remove_arrow(item)
-            else:
-                self.circuit.remove(getattr(item, "label", ""))
-            self.canvas.set_selection(None)
+        items = list(self.canvas.selected_items)
+        if not items and self.canvas.selected is not None:
+            items = [self.canvas.selected]
+        if items:
+            for item in items:
+                if isinstance(item, VoltageArrow):
+                    self.circuit.remove_arrow(item)
+                else:
+                    self.circuit.remove(getattr(item, "label", ""))
+            self.canvas.set_selections([])
             self.engine.recompute()
             self._circuit_changed()
 
     def new_project(self) -> None:
+        if not self._confirm_unsaved_changes():
+            return
         self.circuit = Circuit()
         self.engine = SimulationEngine(self.circuit)
         self.canvas.circuit = self.circuit
         self.canvas.engine = self.engine
-        self.canvas.set_selection(None)
+        self.canvas.set_selections([])
         self.project_path = None
         self.scenario_text = ""
+        self.is_dirty = False
         self.engine.recompute()
         self._circuit_changed()
+        self.is_dirty = False
+        self._refresh_title()
 
     def open_project(self) -> None:
+        if not self._confirm_unsaved_changes():
+            return
         filename, _ = QFileDialog.getOpenFileName(
             self, "Ouvrir un projet VoltForge", "",
-            "Projets VoltForge (*.vfproj.json);;Fichiers JSON (*.json)",
+            "Projet VoltForge (*.voltforge);;"
+            "Anciens projets JSON (*.vfproj.json *.json)",
         )
         if not filename:
             return
         try:
-            data = json.loads(Path(filename).read_text(encoding="utf-8"))
+            path = Path(filename)
+            if zipfile.is_zipfile(path):
+                with zipfile.ZipFile(path) as archive:
+                    data = json.loads(archive.read("circuit.vfdata").decode("utf-8"))
+            else:
+                data = json.loads(path.read_text(encoding="utf-8"))
             circuit = Circuit.from_dict(data)
             self.circuit = circuit
             self.engine = SimulationEngine(circuit)
             self.canvas.circuit = circuit
             self.canvas.engine = self.engine
             self.canvas.set_selection(None)
-            self.project_path = Path(filename)
+            self.project_path = path
             self.scenario_text = data.get("scenario", "")
             self.engine.recompute()
             self._circuit_changed()
-        except (OSError, ValueError, KeyError, TypeError) as exc:
+            self.is_dirty = False
+            self._refresh_title()
+        except (
+            OSError, ValueError, KeyError, TypeError, UnicodeDecodeError,
+            zipfile.BadZipFile,
+        ) as exc:
             QMessageBox.critical(self, "Ouverture impossible", str(exc))
 
-    def save_project(self) -> None:
+    def save_project(self) -> bool:
         if self.project_path is None:
-            self.save_project_as()
-            return
-        self._write_project(self.project_path)
+            return self.save_project_as()
+        return self._write_project(self.project_path)
 
-    def save_project_as(self) -> None:
+    def save_project_as(self) -> bool:
         filename, _ = QFileDialog.getSaveFileName(
-            self, "Enregistrer le projet", "circuit.vfproj.json",
-            "Projet VoltForge (*.vfproj.json)",
+            self, "Enregistrer le projet", "Mon circuit.voltforge",
+            "Projet VoltForge (*.voltforge)",
         )
-        if filename:
-            path = Path(filename)
-            if not path.name.endswith(".vfproj.json"):
-                path = path.with_name(path.name + ".vfproj.json")
-            if self._write_project(path):
-                self.project_path = path
+        if not filename:
+            return False
+        path = Path(filename)
+        if path.suffix.lower() != ".voltforge":
+            path = path.with_name(path.name + ".voltforge")
+        if self._write_project(path):
+            self.project_path = path
+            self._refresh_title()
+            return True
+        return False
 
     def _write_project(self, path: Path) -> bool:
         try:
-            path.write_text(
-                json.dumps(self.circuit.to_dict(self.scenario_text),
-                           ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            data = json.dumps(
+                self.circuit.to_dict(self.scenario_text),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            package = io.BytesIO()
+            with zipfile.ZipFile(package, "w", zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("manifest.txt", "VoltForge project\nformat=1\n")
+                archive.writestr("circuit.vfdata", data)
+            path.write_bytes(package.getvalue())
+            self.is_dirty = False
+            self._refresh_title()
             self.statusBar().showMessage(f"Projet enregistré : {path}", 5000)
             return True
         except OSError as exc:
             QMessageBox.critical(self, "Enregistrement impossible", str(exc))
             return False
+
+    def _confirm_unsaved_changes(self) -> bool:
+        if not self.is_dirty:
+            return True
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Modifications non enregistrées")
+        box.setText("Voulez-vous enregistrer les modifications du circuit ?")
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel
+        )
+        box.setDefaultButton(QMessageBox.StandardButton.Save)
+        answer = box.exec()
+        if answer == QMessageBox.StandardButton.Save:
+            return self.save_project()
+        return answer == QMessageBox.StandardButton.Discard
 
     def export_diagram(self, extension: str | None = None) -> None:
         filters = (
@@ -855,7 +1096,7 @@ class MainWindow(QMainWindow):
             self.engine.load_program(scenario_text)
             if self.engine.program_errors:
                 raise ValueError("\n".join(self.engine.program_errors))
-            self.scenario_text = scenario_text
+            self._scenario_text_changed(scenario_text)
             return scenario_text
 
         add_button.clicked.connect(add_event_row)
@@ -989,7 +1230,7 @@ class MainWindow(QMainWindow):
                     QMessageBox.critical(dialog, "Écriture impossible", str(exc))
 
         def start_playback():
-            self.scenario_text = editor.toPlainText()
+            self._scenario_text_changed(editor.toPlainText())
             program = self.engine.load_program(self.scenario_text)
             if self.engine.program_errors:
                 QMessageBox.warning(
@@ -1016,7 +1257,7 @@ class MainWindow(QMainWindow):
             self.refresh_results()
 
         def make_gif():
-            self.scenario_text = editor.toPlainText()
+            self._scenario_text_changed(editor.toPlainText())
             filename, _ = QFileDialog.getSaveFileName(
                 dialog, "Exporter l'animation", "simulation.gif", "GIF animé (*.gif)"
             )
@@ -1063,9 +1304,9 @@ class MainWindow(QMainWindow):
         stop_button.clicked.connect(stop_playback)
         gif_button.clicked.connect(make_gif)
         close_button.clicked.connect(dialog.accept)
-        dialog.finished.connect(lambda: setattr(
-            self, "scenario_text", editor.toPlainText()
-        ))
+        dialog.finished.connect(
+            lambda: self._scenario_text_changed(editor.toPlainText())
+        )
         dialog.exec()
 
     def _advance_playback(self) -> None:
@@ -1081,7 +1322,10 @@ class MainWindow(QMainWindow):
         if self._play_timer.isActive():
             self._play_timer.stop()
             self.engine.end_transient(restore=True)
-        event.accept()
+        if self._confirm_unsaved_changes():
+            event.accept()
+        else:
+            event.ignore()
 
 
 def QApplication_process_events() -> None:

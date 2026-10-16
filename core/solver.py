@@ -9,7 +9,9 @@ Implémente l'**Analyse Nodale Modifiée** (*Modified Nodal Analysis*) :
   scénarios séquentiels / export GIF.
 * Composants non linéaires (diode, LED) : modèle linéaire par morceaux
   (seuil ``vf`` + ``r_on``/``r_off``) convergé par itérations.
-* Fusible : déclenchement (mise en circuit ouvert) détecté puis re-résolu.
+* Protections : fusibles et composants dépassant leurs limites de tension ou
+  de puissance deviennent grillés (circuit ouvert) puis le réseau est résolu
+  à nouveau ; un générateur court-circuité est également détruit.
 * Instruments : Voltmètre (résistance ∞), Ampèremètre (shunt ≈ 0),
   Ohmmètre (injection d'un courant de test, lecture ``U/|I|``).
 * Moteur CC : modèle ``U = r_m·I + ke·ω`` / ``kt·I = tc + b·ω`` ramené à
@@ -146,8 +148,7 @@ class Solver:
         ``dt>0``    -> un pas de régime transitoire (modèles compagnons).
         """
         sol = self._solve_once(dt, t)
-        nonlinear = [c for c in self.circuit.components
-                     if isinstance(c, (Diode, Led, Fuse))]
+        nonlinear = [c for c in self.circuit.components if c.is_branch]
         iterations = 0
         for iterations in range(1, MAX_ITER + 1):
             changed = False
@@ -159,6 +160,16 @@ class Solver:
                     if not comp.blown and abs(res.i) > comp.i_rated + 1e-12:
                         comp.blown = True
                         changed = True
+                    continue
+                if comp.get_prop("blown"):
+                    continue
+                if self._should_blow(comp, res):
+                    comp.set_prop("blown", True)
+                    if isinstance(comp, (Diode, Led)):
+                        comp.tstate["on"] = 0
+                    changed = True
+                    continue
+                if not isinstance(comp, (Diode, Led)):
                     continue
                 # Diode / LED : hystérésis autour du seuil (anti-oscillation)
                 state_on = bool(comp.tstate.get("on", 0))
@@ -197,7 +208,9 @@ class Solver:
 
         vsrcs: List[Generator] = [
             c for c in comps
-            if isinstance(c, Generator) and c.source_type is SourceType.VOLTAGE
+            if isinstance(c, Generator) and
+            c.source_type is SourceType.VOLTAGE and
+            not c.get_prop("blown")
         ]
         m = n_v + len(vsrcs)
         A = np.zeros((m, m), dtype=float)
@@ -229,7 +242,9 @@ class Solver:
             rn = row(comp.node_n)
             info: Dict[str, Any] = {"mode": "passive", "g": 0.0, "ih": 0.0}
 
-            if isinstance(comp, Generator) and comp.source_type is SourceType.CURRENT:
+            if comp.get_prop("blown"):
+                info.update(mode="blown")
+            elif isinstance(comp, Generator) and comp.source_type is SourceType.CURRENT:
                 # Source de courant réelle : I_s en parallèle avec r_i
                 ri = max(comp.ri, 0.0)
                 g = (1.0 / ri) if ri > R_MIN else 0.0
@@ -391,6 +406,8 @@ class Solver:
             elif mode == "gen_i":
                 i = info["g"] * u - info["isrc"]
                 p = u * i
+            elif mode == "blown":
+                i = p = 0.0
             elif mode == "pot":
                 vw = sol.node_voltages.get(comp.node_of.get("w"), 0.0)
                 u_pw, u_wn = vp - vw, vw - vn
@@ -441,7 +458,7 @@ class Solver:
             sol.warnings.append("Court-circuit détecté : " + ", ".join(sorted(faults)))
         blown = [lbl for lbl, r in sol.branches.items() if r.state == "blown"]
         if blown:
-            sol.warnings.append("Fusible(s) déclenché(s) : " + ", ".join(sorted(blown)))
+            sol.warnings.append("Composant(s) grillé(s) : " + ", ".join(sorted(blown)))
 
         sol.solved = True
         return sol
@@ -450,11 +467,13 @@ class Solver:
     @staticmethod
     def _classify(comp: Component, res: BranchResult) -> Tuple[str, str]:
         from .formatting import si_format
+        if comp.get_prop("blown"):
+            if isinstance(comp, Fuse):
+                return "blown", f"Fusible grillé (Iᵣ = {si_format(comp.i_rated, 'A')})"
+            return "blown", "Composant grillé — réarmez-le dans ses propriétés"
         if comp.node_p is not None and comp.node_p == comp.node_n and \
                 not isinstance(comp, Ground):
             return "shorted", "Bornes court-circuitées (même nœud)"
-        if isinstance(comp, Fuse) and comp.blown:
-            return "blown", f"Fusible grillé (Iᵣ = {si_format(comp.i_rated, 'A')})"
         if abs(res.i) >= I_FAULT:
             return "fault", (f"Courant excessif {si_format(abs(res.i), 'A')} "
                              f"(court-circuit probable)")
@@ -463,6 +482,30 @@ class Solver:
             return "power", (f"Puissance {si_format(abs(res.p), 'W')} > "
                              f"max {si_format(float(p_max), 'W')}")
         return "ok", ""
+
+    @staticmethod
+    def _should_blow(comp: Component, res: BranchResult) -> bool:
+        if isinstance(comp, Generator):
+            if comp.node_p is not None and comp.node_p == comp.node_n:
+                return True
+            p_max = comp.get_prop("p_max")
+            if p_max is not None and float(p_max) > 0 and abs(res.p) > float(p_max):
+                return True
+            if p_max is not None and float(p_max) > 0 and res.sourcing:
+                rated_current = float(p_max) / max(abs(comp.voltage), 1.0)
+                return abs(res.i) > rated_current
+            return False
+
+        u_max = float(comp.get_prop("u_max") or 0.0)
+        if isinstance(comp, Lamp):
+            u_max = min(u_max, comp.u_rated)
+        if abs(res.u) > u_max:
+            return True
+        p_max = comp.get_prop("p_max")
+        return (
+            p_max is not None and float(p_max) > 0
+            and abs(res.p) > float(p_max)
+        )
 
     # -- lectures d'instruments -------------------------------------------
     @staticmethod

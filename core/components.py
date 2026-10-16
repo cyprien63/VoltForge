@@ -249,6 +249,32 @@ class Component:
         p_max=Prop(1.0, unit="W", minimum=0.0, maximum=1e6, step=0.1,
                    group="Limites", tip="Puissance admissible avant avertissement"),
     )
+    COMMON_PROPS: ClassVar[Dict[str, Prop]] = OrderedDict(
+        u_max=Prop(250.0, unit="V", minimum=0.0, maximum=1e6, step=1.0,
+                   group="Limites", tip="Tension maximale avant destruction"),
+        blown=Prop(False, ptype="bool", group="État",
+                   tip="Composant grillé ; décocher pour le réarmer"),
+    )
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        # Make common ratings and the repair state available in every editor.
+        declared = cls.PROPS
+        common = OrderedDict(cls.COMMON_PROPS)
+        if cls.kind in (Kind.DIODE, Kind.LED):
+            common["u_max"] = Prop(
+                50.0, unit="V", minimum=0.0, maximum=1e6, step=1.0,
+                group="Limites", tip="Tension maximale avant destruction",
+            )
+        merged = OrderedDict()
+        merged["label"] = declared.get(
+            "label", Component.PROPS["label"]
+        )
+        for name, prop in common.items():
+            merged[name] = declared.get(name, prop)
+        merged.update((name, prop) for name, prop in declared.items()
+                      if name not in merged)
+        cls.PROPS = merged
 
     def __init__(self, x: float, y: float, rotation: int = 0,
                  label: Optional[str] = None, **props: Any):
