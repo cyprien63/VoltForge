@@ -446,29 +446,41 @@ class MainWindow(QMainWindow):
     THEMES = {
         "light": {
             "background": "#f3f6fb",
-            "panel": "#ffffff",
+            "chrome": "#ffffff",
+            "panel": "#eaeff6",
+            "card": "#ffffff",
             "field": "#ffffff",
+            "inset": "#f1f5fa",
             "text": "#1f2937",
             "muted": "#64748b",
             "border": "#dbe3ed",
             "accent": "#0f9f86",
+            "accent_text": "#ffffff",
+            "accent_hover": "#0c8a74",
             "hover": "#e9f7f4",
             "selected": "#d8f3ed",
-            "inset": "#f1f5fa",
+            "danger": "#b42318",
+            "danger_tint": "#fdeceb",
             "warning": "#b54708",
             "error": "#b42318",
         },
         "dark": {
             "background": "#111a24",
-            "panel": "#192532",
+            "chrome": "#192532",
+            "panel": "#151f2b",
+            "card": "#1d2b3a",
             "field": "#111a24",
+            "inset": "#141f2b",
             "text": "#e5edf5",
             "muted": "#91a2b3",
             "border": "#304252",
             "accent": "#45d2b4",
+            "accent_text": "#0b1a20",
+            "accent_hover": "#5fe0c6",
             "hover": "#253a46",
             "selected": "#23483f",
-            "inset": "#141f2b",
+            "danger": "#ff8a92",
+            "danger_tint": "#2c1c22",
             "warning": "#ffc857",
             "error": "#ff8a92",
         },
@@ -801,22 +813,29 @@ class MainWindow(QMainWindow):
         if hasattr(self, "canvas"):
             self.canvas.set_theme(self.theme)
         background = colors["background"]
+        chrome = colors["chrome"]
         panel = colors["panel"]
+        card = colors["card"]
         field = colors["field"]
+        inset = colors["inset"]
         text = colors["text"]
         muted = colors["muted"]
         border = colors["border"]
         accent = colors["accent"]
+        accent_text = colors["accent_text"]
+        accent_hover = colors["accent_hover"]
         hover = colors["hover"]
         selected = colors["selected"]
+        danger = colors["danger"]
+        danger_tint = colors["danger_tint"]
         self.setStyleSheet(f"""
-            QMainWindow, QWidget {{
-                background: {background};
+            QWidget {{
                 color: {text};
                 font-size: 10pt;
             }}
+            QMainWindow, QDialog {{ background: {background}; }}
             QMenuBar, QMenu, QToolBar {{
-                background: {panel};
+                background: {chrome};
                 color: {text};
                 border: none;
             }}
@@ -829,22 +848,40 @@ class MainWindow(QMainWindow):
             QToolBar::separator {{ background: {border}; width: 1px; margin: 4px; }}
             QToolButton {{
                 background: transparent; border: 1px solid transparent;
-                border-radius: 7px; padding: 6px 9px;
+                border-radius: 6px; padding: 6px 9px;
             }}
-            QToolButton:hover, QPushButton:hover {{ background: {hover}; }}
+            QToolButton:hover {{ background: {hover}; }}
             QToolButton:checked {{ background: {selected}; color: {accent}; }}
             QPushButton {{
-                background: {panel}; border: 1px solid {border};
-                border-radius: 7px; padding: 7px 10px;
+                background: transparent; border: 1px solid {border};
+                border-radius: 6px; padding: 7px 10px;
             }}
+            QPushButton:hover {{ background: {hover}; }}
             QPushButton:pressed {{ background: {selected}; }}
-            QPushButton:disabled {{ color: {muted}; }}
+            QPushButton:disabled {{ color: {muted}; border-color: {border}; }}
+            QPushButton#primaryButton {{
+                background: {accent}; border: 1px solid {accent};
+                color: {accent_text}; font-weight: 600;
+            }}
+            QPushButton#primaryButton:hover {{
+                background: {accent_hover}; border-color: {accent_hover};
+            }}
+            QPushButton#primaryButton:disabled {{
+                background: transparent; color: {muted}; border-color: {border};
+            }}
+            QPushButton#dangerButton {{ color: {danger}; }}
+            QPushButton#dangerButton:hover {{
+                background: {danger_tint}; border-color: {danger};
+            }}
+            QPushButton#dangerButton:disabled {{
+                color: {muted}; background: transparent; border-color: {border};
+            }}
             QGroupBox {{
-                background: {panel}; border: 1px solid {border}; border-radius: 10px;
-                margin-top: 12px; padding: 9px;
+                background: {card}; border: 1px solid {border}; border-radius: 8px;
+                margin-top: 14px; padding: 10px;
             }}
             QGroupBox::title {{
-                subcontrol-origin: margin; left: 12px; padding: 0 5px;
+                subcontrol-origin: margin; left: 12px; padding: 0 6px;
                 font-weight: 600;
             }}
             QLineEdit, QDoubleSpinBox, QSpinBox, QComboBox, QTableWidget,
@@ -852,25 +889,49 @@ class MainWindow(QMainWindow):
                 background: {field}; color: {text}; border: 1px solid {border};
                 border-radius: 6px; padding: 5px 7px;
                 selection-background-color: {accent};
+                selection-color: {accent_text};
             }}
-            QLineEdit:focus, QDoubleSpinBox:focus, QComboBox:focus,
-            QPlainTextEdit:focus {{ border: 1px solid {accent}; }}
+            QLineEdit:focus, QDoubleSpinBox:focus, QSpinBox:focus,
+            QComboBox:focus, QPlainTextEdit:focus {{ border: 1px solid {accent}; }}
+            QTableWidget {{ gridline-color: {border}; }}
+            QHeaderView::section {{
+                background: {chrome}; color: {muted}; border: none;
+                border-bottom: 1px solid {border}; padding: 4px 6px;
+            }}
             QScrollArea {{ background: transparent; border: none; }}
-            QScrollBar:vertical {{
-                background: transparent; width: 10px; margin: 3px;
+            QScrollBar:vertical, QScrollBar:horizontal {{
+                background: transparent; margin: 3px;
             }}
-            QScrollBar::handle:vertical {{
-                background: {border}; min-height: 24px; border-radius: 5px;
+            QScrollBar:vertical {{ width: 10px; }}
+            QScrollBar:horizontal {{ height: 10px; }}
+            QScrollBar::handle:vertical, QScrollBar::handle:horizontal {{
+                background: {border}; border-radius: 5px;
             }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                height: 0; border: none;
+            QScrollBar::handle:vertical {{ min-height: 24px; }}
+            QScrollBar::handle:horizontal {{ min-width: 24px; }}
+            QScrollBar::add-line, QScrollBar::sub-line {{
+                width: 0; height: 0; border: none; background: transparent;
             }}
             QSplitter::handle {{ background: {border}; width: 1px; }}
             QStatusBar {{
-                background: {panel}; color: {muted};
+                background: {chrome}; color: {muted};
                 border-top: 1px solid {border};
             }}
+            QToolTip {{
+                background: {card}; color: {text};
+                border: 1px solid {border}; padding: 4px 6px;
+            }}
+            QWidget#inspectorPanel {{ background: {panel}; }}
+            QWidget#quickControls {{
+                background: {inset}; border: 1px solid {border}; border-radius: 8px;
+            }}
+            QFrame#panelRule {{ background: {border}; border: none; }}
+            QLabel#panelTitle {{ font-size: 12pt; font-weight: 600; }}
+            QLabel#sectionTitle {{ font-weight: 600; }}
             QLabel#mutedText {{ color: {muted}; font-size: 9pt; }}
+            QLabel#selectionSummary {{ font-size: 10.5pt; }}
+            QLabel#resultsSummary {{ color: {muted}; font-size: 9pt; }}
+            QLabel#resultsBody {{ font-size: 10pt; }}
             QLabel#quickParameterLabel {{ font-weight: 600; }}
             QLabel#quickParameterValue {{ color: {accent}; font-weight: 600; }}
             QSlider::groove:horizontal {{
@@ -879,9 +940,9 @@ class MainWindow(QMainWindow):
             QSlider::sub-page:horizontal {{ background: {accent}; border-radius: 2px; }}
             QSlider::handle:horizontal {{
                 background: {accent}; width: 14px; margin: -5px 0;
-                border: 2px solid {panel}; border-radius: 7px;
+                border: 2px solid {card}; border-radius: 7px;
             }}
-            QSlider::handle:horizontal:hover {{ background: {text}; }}
+            QSlider::handle:horizontal:hover {{ background: {accent_hover}; }}
         """)
         QSettings("VoltForge", "VoltForge").setValue("theme", self.theme)
         self._refresh_icons()
