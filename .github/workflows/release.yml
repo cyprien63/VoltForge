@@ -108,14 +108,15 @@ jobs:
           python -m PyInstaller --noconfirm --clean --windowed --onefile --name VoltForge-Portable --distpath "dist\portable" --workpath "build\portable" --specpath "build\portable" --add-data "${iconPath};assets\icons" main.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Rename-Item -Path "dist\portable\VoltForge-Portable.exe" -NewName "VoltForge-${version}-windows-x64-portable.exe"
+          New-Item -ItemType Directory -Force -Path "release-assets" | Out-Null
+          Copy-Item "dist\installer\VoltForge-${version}-windows-x64-setup.exe" "release-assets\"
+          Copy-Item "dist\portable\VoltForge-${version}-windows-x64-portable.exe" "release-assets\"
 
       - name: Upload Windows executables
         uses: actions/upload-artifact@v4
         with:
           name: windows-package
-          path: |
-            dist/installer/VoltForge-${{ needs.prepare.outputs.version }}-windows-x64-setup.exe
-            dist/portable/VoltForge-${{ needs.prepare.outputs.version }}-windows-x64-portable.exe
+          path: release-assets/*.exe
           if-no-files-found: error
 
   build-linux:
