@@ -569,6 +569,7 @@ class MainWindow(QMainWindow):
         toolbar.setMovable(False)
         toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         toolbar.setIconSize(QSize(24, 24))
+        toolbar.setObjectName("mainToolbar")
         self.tool_group = QActionGroup(self)
         self.tool_group.setExclusive(True)
         self.mode_actions = {}
@@ -595,6 +596,7 @@ class MainWindow(QMainWindow):
         components_toolbar.setMovable(False)
         components_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         components_toolbar.setIconSize(QSize(22, 22))
+        components_toolbar.setObjectName("componentsToolbar")
         self.component_categories = {}
         labels = dict((kind, label) for kind, label in self.TOOL_COMPONENTS)
         for category, icon, kinds in self.COMPONENT_CATEGORIES:
@@ -644,9 +646,11 @@ class MainWindow(QMainWindow):
         right = QWidget()
         right.setMinimumWidth(280)
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(4, 4, 4, 4)
+        right_layout.setContentsMargins(6, 6, 6, 6)
+        right_layout.setSpacing(6)
         self.selection_group = QGroupBox("Sélection")
         self.selection_layout = QVBoxLayout(self.selection_group)
+        self.selection_layout.setSpacing(8)
         self.selection_title = QLabel("Aucun élément sélectionné")
         self.selection_title.setObjectName("selectionTitle")
         self.selection_title.setWordWrap(True)
@@ -654,6 +658,7 @@ class MainWindow(QMainWindow):
         self.selection_label = QLabel("Aucun élément sélectionné")
         self.selection_label.setObjectName("selectionDetail")
         self.selection_label.setWordWrap(True)
+        self.selection_label.setStyleSheet("background: transparent; padding: 4px; border: 1px solid transparent;")
         self.selection_layout.addWidget(self.selection_label)
         self.quick_controls_group = QWidget()
         quick_layout = QVBoxLayout(self.quick_controls_group)
@@ -720,7 +725,7 @@ class MainWindow(QMainWindow):
         )
         self.results_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.results_table.setShowGrid(False)
-        self.results_table.setAlternatingRowColors(True)
+        self.results_table.setAlternatingRowColors(False)
         self.results_table.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
@@ -749,6 +754,7 @@ class MainWindow(QMainWindow):
         splitter.setSizes([900, 320])
         simulation_toolbar = self.addToolBar("Simulation")
         simulation_toolbar.setMovable(False)
+        simulation_toolbar.setObjectName("simToolbar")
         self._toolbar_action(
             simulation_toolbar, "Simulation…", self.open_scenario_dialog
         )
@@ -800,17 +806,18 @@ class MainWindow(QMainWindow):
             QMenuBar::item:selected, QMenu::item:selected {{ background: {hover}; }}
             QMenu {{ border: 1px solid {border}; padding: 5px; }}
             QMenu::item {{ padding: 6px 24px 6px 10px; border-radius: 4px; }}
-            QToolBar {{ spacing: 6px; padding: 6px 8px; }}
+            QToolBar {{ spacing: 6px; padding: 6px 8px; border-bottom: 1px solid {border}; }}
+            QToolBar#mainToolbar, QToolBar#componentsToolbar {{ border-top: 1px solid {border}; border-bottom: 1px solid {border}; }}
             QToolBar::separator {{ background: {border}; width: 1px; margin: 4px; }}
             QToolButton {{
                 background: transparent; border: 1px solid transparent;
-                border-radius: 6px; padding: 6px 9px;
+                border-radius: 4px; padding: 6px 8px;
             }}
             QToolButton:hover, QPushButton:hover {{ background: {hover}; }}
-            QToolButton:checked {{ background: {selected}; color: {accent}; }}
+            QToolButton:checked {{ background: {selected}; color: {accent}; border: 1px solid {accent}; }}
             QPushButton {{
                 background: {panel}; border: 1px solid {border};
-                border-radius: 6px; padding: 7px 10px;
+                border-radius: 4px; padding: 7px 10px;
             }}
             QPushButton:pressed {{ background: {selected}; }}
             QPushButton:disabled {{ color: {muted}; }}
@@ -819,7 +826,7 @@ class MainWindow(QMainWindow):
                 border: 1px solid {danger};
             }}
             QGroupBox {{
-                background: {panel}; border: 1px solid {border}; border-radius: 8px;
+                background: {panel}; border: 1px solid {border}; border-radius: 0px;
                 margin-top: 14px; padding: 10px 9px 9px 9px;
             }}
             QGroupBox::title {{
@@ -866,11 +873,12 @@ class MainWindow(QMainWindow):
             QLabel#selectionTitle {{
                 font-size: 12pt; font-weight: 600; padding-bottom: 2px;
             }}
-            QLabel#selectionDetail {{ color: {text}; }}
+            QLabel#selectionDetail {{ color: {text}; background: transparent; padding: 6px; border: 1px solid {border}; }}
             QLabel#sectionHeading {{
                 color: {muted}; font-weight: 600; text-transform: uppercase;
                 letter-spacing: 1px; font-size: 8.5pt;
-                border-top: 1px solid {border}; padding-top: 9px;
+                border-top: 1px solid {border}; border-bottom: 1px solid {border};
+                padding-top: 6px; padding-bottom: 6px; margin-top: 4px;
             }}
             QLabel#resultsDetail {{ color: {muted}; font-size: 9pt; }}
             QLabel#mutedText {{ color: {muted}; font-size: 9pt; }}
