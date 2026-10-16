@@ -151,11 +151,18 @@ class SimulationEngine:
             saved = self._snapshot.get(comp.label)
             if not saved:
                 continue
+            burned_during_simulation = bool(comp.get_prop("blown"))
             for k, v in saved.items():
+                if k == "blown":
+                    continue
                 try:
                     comp.set_prop(k, v)
                 except (ValueError, KeyError):
                     pass
+            comp.set_prop(
+                "blown",
+                burned_during_simulation or bool(saved.get("blown", False)),
+            )
 
     # ------------------------------------------------------------------
     # Utilitaires

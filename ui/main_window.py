@@ -9,8 +9,9 @@ from pathlib import Path
 import sys
 import zipfile
 
-from PyQt6.QtCore import QPointF, QSize, Qt, QTimer, QSettings
-from PyQt6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
+from PyQt6.QtCore import QByteArray, QPointF, QSize, Qt, QTimer, QSettings
+from PyQt6.QtGui import QAction, QActionGroup, QIcon, QKeySequence, QPainter, QPixmap
+from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -31,6 +32,7 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QSpinBox,
     QScrollArea,
+    QSlider,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -40,8 +42,29 @@ from PyQt6.QtWidgets import (
 )
 
 from core.circuit import Circuit
-from core.components import Component, Kind, Motor, Switch, create_component
+from core.components import (
+    Ammeter,
+    Capacitor,
+    Component,
+    Diode,
+    Fuse,
+    Generator,
+    Inductor,
+    Kind,
+    Lamp,
+    Led,
+    Motor,
+    Ohmmeter,
+    Potentiometer,
+    PushButton,
+    Resistor,
+    SourceType,
+    Switch,
+    Voltmeter,
+    create_component,
+)
 from core.simulation import SimulationEngine
+from core.solver import BranchResult
 from exporters.gif import export_gif
 from exporters.static import export_static
 from ui.canvas import CircuitCanvas
@@ -185,9 +208,19 @@ class OhmCalculatorDialog(QDialog):
                 u = i * r
             if any(value is None for value in (u, i, r, p)):
                 raise ValueError("Le calcul est impossible avec une valeur nulle.")
+            formulae = {
+                frozenset(("u", "i")): f"R = U/I = {u:.6g}/{i:.6g} ; P = U×I",
+                frozenset(("u", "r")): f"I = U/R = {u:.6g}/{r:.6g} ; P = U²/R",
+                frozenset(("u", "p")): f"I = P/U = {p:.6g}/{u:.6g} ; R = U²/P",
+                frozenset(("i", "r")): f"U = R×I = {r:.6g}×{i:.6g} ; P = I²×R",
+                frozenset(("i", "p")): f"U = P/I = {p:.6g}/{i:.6g} ; R = P/I²",
+                frozenset(("r", "p")): "I = √(P/R) ; U = √(P×R)",
+            }
+            formula = formulae[frozenset(known)]
             for key, value in zip(("u", "i", "r", "p"), (u, i, r, p)):
                 self.fields[key].setText(f"{value:.6g}")
             self.result.setText(
+                f"Formule utilisée : {formula}\n"
                 f"U = {u:.6g} V · I = {i:.6g} A · "
                 f"R = {r:.6g} Ω · P = {p:.6g} W"
             )
@@ -264,11 +297,21 @@ class ResistorSizerDialog(QDialog):
                  if rating >= resistor_power * 2),
                 resistor_power * 2,
             )
+            current_formula = (
+                f"I = {current:.4g} A"
+                if current_text
+                else f"I = P/U = {parse_value(power_text):.4g}/{load:.4g}"
+                f" = {current:.4g} A"
+            )
             self.result.setText(
-                f"Courant utilisé : {current:.4g} A\n"
-                f"Résistance théorique : {theoretical:.4g} Ω\n"
+                f"Formules : R = (Usource − Urécepteur)/I ; "
+                f"PR = I²×R\n"
+                f"{current_formula}\n"
+                f"R = ({source:.4g} − {load:.4g})/{current:.4g} "
+                f"= {theoretical:.4g} Ω\n"
                 f"Valeur normalisée conseillée : {resistance:.4g} Ω\n"
-                f"Puissance dissipée : {resistor_power:.4g} W — "
+                f"PR = {current:.4g}²×{resistance:.4g} "
+                f"= {resistor_power:.4g} W — "
                 f"choisissez une résistance d'au moins {safe_power:g} W."
             )
         except (ValueError, ZeroDivisionError) as exc:
@@ -282,14 +325,20 @@ class MainWindow(QMainWindow):
         (Kind.GENERATOR, "Générateur"),
         (Kind.BATTERY, "Pile"),
         (Kind.RESISTOR, "Résistance"),
+        (Kind.THERMISTOR, "Thermistance NTC"),
+        (Kind.PHOTORESISTOR, "Photorésistance"),
+        (Kind.HEATER, "Résistance chauffante"),
         (Kind.POTENTIOMETER, "Potentiomètre"),
         (Kind.SWITCH, "Interrupteur"),
+        (Kind.PUSH_BUTTON, "Bouton-poussoir"),
         (Kind.CAPACITOR, "Condensateur"),
         (Kind.INDUCTOR, "Bobine"),
         (Kind.DIODE, "Diode"),
         (Kind.LED, "LED"),
         (Kind.LAMP, "Lampe"),
         (Kind.MOTOR, "Moteur"),
+        (Kind.SPEAKER, "Haut-parleur"),
+        (Kind.BUZZER, "Buzzer"),
         (Kind.FUSE, "Fusible"),
         (Kind.GROUND, "Masse"),
         (Kind.VOLTMETER, "Voltmètre"),
@@ -300,21 +349,111 @@ class MainWindow(QMainWindow):
         ("Sources", "generator-voltage.svg",
          (Kind.GENERATOR, Kind.BATTERY)),
         ("Passifs", "resistor.svg",
-         (Kind.RESISTOR, Kind.POTENTIOMETER, Kind.SWITCH,
+         (Kind.RESISTOR, Kind.THERMISTOR, Kind.PHOTORESISTOR, Kind.HEATER,
+          Kind.POTENTIOMETER, Kind.SWITCH, Kind.PUSH_BUTTON,
           Kind.CAPACITOR, Kind.INDUCTOR)),
         ("Semi-conducteurs", "diode.svg", (Kind.DIODE, Kind.LED)),
-        ("Actionneurs", "motor.svg", (Kind.LAMP, Kind.MOTOR, Kind.FUSE)),
+        ("Actionneurs", "motor.svg",
+         (Kind.LAMP, Kind.MOTOR, Kind.SPEAKER, Kind.BUZZER, Kind.FUSE)),
         ("Mesure", "voltmeter.svg",
          (Kind.VOLTMETER, Kind.AMMETER, Kind.OHMMETER)),
         ("Topologie", "ground.svg", (Kind.GROUND,)),
     )
+    QUICK_PARAMETER_ORDER = {
+        Kind.GENERATOR: ("voltage", "current", "ri", "p_max"),
+        Kind.BATTERY: ("voltage", "ri", "p_max"),
+        Kind.LAMP: ("resistance", "u_rated", "p_max"),
+        Kind.RESISTOR: ("resistance", "p_max"),
+        Kind.CUSTOM: ("resistance", "p_max"),
+        Kind.THERMISTOR: ("temperature", "r_ref", "beta"),
+        Kind.PHOTORESISTOR: ("illumination", "dark_resistance", "sensitivity"),
+        Kind.HEATER: ("resistance", "p_max"),
+        Kind.SPEAKER: ("resistance", "p_max"),
+        Kind.BUZZER: ("resistance", "voltage", "p_max"),
+        Kind.LED: ("vf", "r_on", "p_max"),
+        Kind.DIODE: ("vf", "r_on", "p_max"),
+        Kind.MOTOR: ("r_m", "ke", "kt", "tc"),
+        Kind.CAPACITOR: ("capacitance", "v0"),
+        Kind.INDUCTOR: ("inductance", "r_w"),
+        Kind.POTENTIOMETER: ("resistance", "level"),
+        Kind.SWITCH: ("r_on",),
+        Kind.PUSH_BUTTON: ("r_on",),
+        Kind.FUSE: ("i_rated",),
+        Kind.VOLTMETER: ("r_int",),
+        Kind.AMMETER: ("r_sh",),
+        Kind.OHMMETER: ("i_test", "r_int"),
+    }
+    QUICK_PARAMETER_RANGES = {
+        "voltage": (-24.0, 24.0),
+        "current": (-5.0, 5.0),
+        "ri": (0.0, 5.0),
+        "p_max": (0.01, 100.0),
+        "resistance": (0.1, 1000.0),
+        "temperature": (-40.0, 150.0),
+        "r_ref": (1.0, 1e6),
+        "beta": (100.0, 10_000.0),
+        "illumination": (0.0, 100_000.0),
+        "dark_resistance": (1.0, 1e9),
+        "sensitivity": (0.1, 2.0),
+        "u_rated": (1.0, 24.0),
+        "vf": (0.0, 6.0),
+        "r_on": (0.001, 100.0),
+        "r_m": (0.1, 50.0),
+        "ke": (0.0, 1.0),
+        "kt": (0.0, 1.0),
+        "tc": (0.0, 10.0),
+        "capacitance": (1e-9, 1.0),
+        "v0": (-24.0, 24.0),
+        "inductance": (1e-6, 10.0),
+        "r_w": (0.0, 10.0),
+        "level": (0.0, 1.0),
+        "i_rated": (0.01, 20.0),
+        "r_int": (1e3, 1e9),
+        "r_sh": (0.0, 1.0),
+        "i_test": (1e-6, 1.0),
+    }
+    QUICK_PARAMETER_LABELS = {
+        "voltage": "Tension",
+        "current": "Courant",
+        "ri": "Résistance interne",
+        "p_max": "Puissance maximale",
+        "resistance": "Résistance",
+        "temperature": "Température ambiante",
+        "r_ref": "Résistance de référence",
+        "beta": "Coefficient bêta",
+        "illumination": "Éclairement",
+        "dark_resistance": "Résistance dans l’obscurité",
+        "sensitivity": "Sensibilité lumineuse",
+        "u_rated": "Tension nominale",
+        "vf": "Tension directe",
+        "r_on": "Résistance à l’état passant",
+        "r_m": "Résistance moteur",
+        "ke": "Constante de tension",
+        "kt": "Constante de couple",
+        "tc": "Couple résistant",
+        "capacitance": "Capacité",
+        "v0": "Tension initiale",
+        "inductance": "Inductance",
+        "r_w": "Résistance du bobinage",
+        "level": "Position du curseur",
+        "i_rated": "Courant nominal",
+        "r_int": "Résistance interne",
+        "r_sh": "Résistance du shunt",
+        "i_test": "Courant de test",
+    }
     ICONS = {
         Kind.GENERATOR: "generator-voltage.svg",
         Kind.BATTERY: "battery.svg",
         Kind.RESISTOR: "resistor.svg",
         Kind.CUSTOM: "custom.svg",
+        Kind.THERMISTOR: "thermistor.svg",
+        Kind.PHOTORESISTOR: "photoresistor.svg",
+        Kind.HEATER: "heater.svg",
+        Kind.SPEAKER: "speaker.svg",
+        Kind.BUZZER: "buzzer.svg",
         Kind.POTENTIOMETER: "potentiometer.svg",
         Kind.SWITCH: "switch.svg",
+        Kind.PUSH_BUTTON: "push-button.svg",
         Kind.CAPACITOR: "capacitor.svg",
         Kind.INDUCTOR: "inductor.svg",
         Kind.DIODE: "diode.svg",
@@ -436,6 +575,7 @@ class MainWindow(QMainWindow):
             ("Flèche U", "voltage", "voltage-arrow.svg"),
         ):
             action = QAction(QIcon(str(self._icon_path(icon))), label, self)
+            action.setProperty("iconName", icon)
             action.setCheckable(True)
             if label == "Sélection":
                 action.setChecked(True)
@@ -457,15 +597,17 @@ class MainWindow(QMainWindow):
         for category, icon, kinds in self.COMPONENT_CATEGORIES:
             button = QToolButton(self)
             button.setText(category)
-            button.setIcon(QIcon(str(self._icon_path(icon))))
+            button.setProperty("iconName", icon)
+            button.setIcon(self._icon(icon))
             button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
             menu = QMenu(button)
             for kind in kinds:
                 action = QAction(
-                    QIcon(str(self._icon_path(self.ICONS[kind]))),
+                    self._icon(self.ICONS[kind]),
                     labels[kind],
                     menu,
                 )
+                action.setData(kind.value)
                 action.triggered.connect(
                     lambda checked=False, selected_kind=kind:
                     self.select_component_tool(selected_kind)
@@ -478,12 +620,13 @@ class MainWindow(QMainWindow):
         passives_menu = self.component_categories["Passifs"][1]
         passives_menu.addSeparator()
         custom_action = QAction(
-            QIcon(str(self._icon_path(self.ICONS[Kind.CUSTOM]))),
+            self._icon(self.ICONS[Kind.CUSTOM]),
             "Créer perso…",
             self,
         )
         custom_action.triggered.connect(self.create_custom_component)
         passives_menu.addAction(custom_action)
+        self.custom_component_action = custom_action
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter = splitter
@@ -496,6 +639,7 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.canvas)
 
         right = QWidget()
+        right.setMinimumWidth(280)
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(4, 4, 4, 4)
         self.selection_group = QGroupBox("Propriétés")
@@ -503,6 +647,20 @@ class MainWindow(QMainWindow):
         self.selection_label = QLabel("Aucun élément sélectionné")
         self.selection_label.setWordWrap(True)
         self.selection_layout.addWidget(self.selection_label)
+        self.quick_controls_group = QGroupBox("Réglage en direct")
+        quick_layout = QVBoxLayout(self.quick_controls_group)
+        quick_layout.setContentsMargins(10, 12, 10, 8)
+        quick_hint = QLabel("Les résultats se recalculent pendant le réglage.")
+        quick_hint.setObjectName("mutedText")
+        quick_hint.setWordWrap(True)
+        quick_layout.addWidget(quick_hint)
+        self.quick_controls_layout = QVBoxLayout()
+        self.quick_controls_layout.setSpacing(8)
+        quick_layout.addLayout(self.quick_controls_layout)
+        self.quick_controls_group.hide()
+        self._quick_controls_component: Component | None = None
+        self._quick_parameter_controls = {}
+        self.selection_layout.addWidget(self.quick_controls_group)
         selection_buttons = QHBoxLayout()
         self.edit_button = QPushButton("Modifier")
         self.edit_button.clicked.connect(self.edit_selected)
@@ -531,11 +689,15 @@ class MainWindow(QMainWindow):
         )
         self.results_text.setWordWrap(True)
         results_layout.addWidget(self.results_text)
-        result_scroll = QScrollArea()
-        result_scroll.setWidgetResizable(True)
-        result_scroll.setWidget(self.results_group)
-        right_layout.addWidget(result_scroll, 1)
-        splitter.addWidget(right)
+        right_layout.addWidget(self.results_group, 1)
+        inspector_scroll = QScrollArea()
+        inspector_scroll.setObjectName("inspectorScroll")
+        inspector_scroll.setWidgetResizable(True)
+        inspector_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        inspector_scroll.setWidget(right)
+        splitter.addWidget(inspector_scroll)
         splitter.setSizes([900, 320])
         simulation_toolbar = self.addToolBar("Simulation")
         simulation_toolbar.setMovable(False)
@@ -565,40 +727,89 @@ class MainWindow(QMainWindow):
         if hasattr(self, "canvas"):
             self.canvas.set_theme(self.theme)
         if self.theme == "light":
-            self.setStyleSheet("""
-                QMainWindow, QWidget { background: #f1f5f9; color: #203040; }
-                QMenuBar, QMenu, QToolBar { background: #ffffff; color: #203040; }
-                QGroupBox { border: 1px solid #cbd5df; border-radius: 8px;
-                            margin-top: 10px; padding: 8px; }
-                QGroupBox::title { subcontrol-origin: margin; left: 10px;
-                                   padding: 0 4px; }
-                QPushButton, QToolButton { background: #ffffff; border: 1px solid #cbd5df;
-                                           border-radius: 6px; padding: 5px 8px; }
-                QPushButton:hover, QToolButton:hover { background: #e3f4f0; }
-                QLineEdit, QDoubleSpinBox, QSpinBox, QComboBox, QTableWidget {
-                    background: #ffffff; color: #203040; border: 1px solid #cbd5df;
-                    border-radius: 4px; padding: 3px;
-                }
-                QScrollArea { background: #ffffff; }
-            """)
+            background, panel, field = "#f3f6fb", "#ffffff", "#ffffff"
+            text, muted, border = "#1f2937", "#64748b", "#dbe3ed"
+            accent, hover, selected = "#0f9f86", "#e9f7f4", "#d8f3ed"
         else:
-            self.setStyleSheet("""
-                QMainWindow, QWidget { background: #17232d; color: #e6edf3; }
-                QMenuBar, QMenu, QToolBar { background: #202e39; color: #e6edf3; }
-                QGroupBox { border: 1px solid #3c4c59; border-radius: 8px;
-                            margin-top: 10px; padding: 8px; }
-                QGroupBox::title { subcontrol-origin: margin; left: 10px;
-                                   padding: 0 4px; }
-                QPushButton, QToolButton { background: #263744; border: 1px solid #455968;
-                                           border-radius: 6px; padding: 5px 8px; }
-                QPushButton:hover, QToolButton:hover { background: #344b5a; }
-                QLineEdit, QDoubleSpinBox, QSpinBox, QComboBox, QTableWidget {
-                    background: #101820; color: #e6edf3; border: 1px solid #455968;
-                    border-radius: 4px; padding: 3px;
-                }
-                QScrollArea { background: #17232d; }
-            """)
+            background, panel, field = "#111a24", "#192532", "#111a24"
+            text, muted, border = "#e5edf5", "#91a2b3", "#304252"
+            accent, hover, selected = "#45d2b4", "#253a46", "#23483f"
+        self.setStyleSheet(f"""
+            QMainWindow, QWidget {{
+                background: {background};
+                color: {text};
+                font-size: 10pt;
+            }}
+            QMenuBar, QMenu, QToolBar {{
+                background: {panel};
+                color: {text};
+                border: none;
+            }}
+            QMenuBar {{ padding: 4px 8px; }}
+            QMenuBar::item {{ padding: 6px 10px; border-radius: 5px; }}
+            QMenuBar::item:selected, QMenu::item:selected {{ background: {hover}; }}
+            QMenu {{ border: 1px solid {border}; padding: 5px; }}
+            QMenu::item {{ padding: 6px 24px 6px 10px; border-radius: 4px; }}
+            QToolBar {{ spacing: 6px; padding: 6px 8px; }}
+            QToolBar::separator {{ background: {border}; width: 1px; margin: 4px; }}
+            QToolButton {{
+                background: transparent; border: 1px solid transparent;
+                border-radius: 7px; padding: 6px 9px;
+            }}
+            QToolButton:hover, QPushButton:hover {{ background: {hover}; }}
+            QToolButton:checked {{ background: {selected}; color: {accent}; }}
+            QPushButton {{
+                background: {panel}; border: 1px solid {border};
+                border-radius: 7px; padding: 7px 10px;
+            }}
+            QPushButton:pressed {{ background: {selected}; }}
+            QPushButton:disabled {{ color: {muted}; }}
+            QGroupBox {{
+                background: {panel}; border: 1px solid {border}; border-radius: 10px;
+                margin-top: 12px; padding: 9px;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin; left: 12px; padding: 0 5px;
+                font-weight: 600;
+            }}
+            QLineEdit, QDoubleSpinBox, QSpinBox, QComboBox, QTableWidget,
+            QPlainTextEdit {{
+                background: {field}; color: {text}; border: 1px solid {border};
+                border-radius: 6px; padding: 5px 7px;
+                selection-background-color: {accent};
+            }}
+            QLineEdit:focus, QDoubleSpinBox:focus, QComboBox:focus,
+            QPlainTextEdit:focus {{ border: 1px solid {accent}; }}
+            QScrollArea {{ background: transparent; border: none; }}
+            QScrollBar:vertical {{
+                background: transparent; width: 10px; margin: 3px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {border}; min-height: 24px; border-radius: 5px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0; border: none;
+            }}
+            QSplitter::handle {{ background: {border}; width: 1px; }}
+            QStatusBar {{
+                background: {panel}; color: {muted};
+                border-top: 1px solid {border};
+            }}
+            QLabel#mutedText {{ color: {muted}; font-size: 9pt; }}
+            QLabel#quickParameterLabel {{ font-weight: 600; }}
+            QLabel#quickParameterValue {{ color: {accent}; font-weight: 600; }}
+            QSlider::groove:horizontal {{
+                height: 5px; background: {border}; border-radius: 2px;
+            }}
+            QSlider::sub-page:horizontal {{ background: {accent}; border-radius: 2px; }}
+            QSlider::handle:horizontal {{
+                background: {accent}; width: 14px; margin: -5px 0;
+                border: 2px solid {panel}; border-radius: 7px;
+            }}
+            QSlider::handle:horizontal:hover {{ background: {text}; }}
+        """)
         QSettings("VoltForge", "VoltForge").setValue("theme", self.theme)
+        self._refresh_icons()
 
     def _refresh_title(self) -> None:
         name = self.project_path.name if self.project_path else "Nouveau projet"
@@ -610,6 +821,38 @@ class MainWindow(QMainWindow):
     def _icon_path(filename: str) -> Path:
         base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
         return base / "assets" / "icons" / filename
+
+    def _icon(self, filename: str) -> QIcon:
+        source = self._icon_path(filename).read_text(encoding="utf-8")
+        foreground = "#243746" if self.theme == "light" else "#e8f2f2"
+        source = source.replace("#e8f2f2", foreground)
+        source = source.replace("#dce7ef", foreground)
+        if self.theme == "light":
+            source = source.replace("#c6d1d8", "#526477")
+        renderer = QSvgRenderer(QByteArray(source.encode("utf-8")))
+        if not renderer.isValid():
+            raise ValueError(f"SVG d'icône invalide : {filename}")
+        pixmap = QPixmap(64, 64)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        renderer.render(painter)
+        painter.end()
+        return QIcon(pixmap)
+
+    def _refresh_icons(self) -> None:
+        if not hasattr(self, "mode_actions"):
+            return
+        for action in self.mode_actions.values():
+            action.setIcon(self._icon(action.property("iconName")))
+        for button, menu in self.component_categories.values():
+            button.setIcon(self._icon(button.property("iconName")))
+            for action in menu.actions():
+                if action.data():
+                    action.setIcon(self._icon(self.ICONS[Kind(action.data())]))
+        if hasattr(self, "custom_component_action"):
+            self.custom_component_action.setIcon(
+                self._icon(self.ICONS[Kind.CUSTOM])
+            )
 
     def _set_tool_mode(self, mode: str) -> None:
         self.canvas.set_mode(mode)
@@ -640,6 +883,7 @@ class MainWindow(QMainWindow):
         item = self.canvas.selected
         selected_count = len(self.canvas.selected_items)
         if selected_count > 1:
+            self._refresh_quick_controls(None)
             self.selection_label.setText(
                 f"{selected_count} éléments sélectionnés\n"
                 "Faites glisser pour les déplacer ensemble ; Supprimer pour tout effacer."
@@ -651,6 +895,7 @@ class MainWindow(QMainWindow):
             self.switch_button.hide()
             return
         if item is None:
+            self._refresh_quick_controls(None)
             self.selection_label.setText(
                 f"{len(self.circuit.components)} composant(s), "
                 f"{len(self.circuit.wires)} fil(s), {len(self.circuit.nodes)} nœud(s), "
@@ -663,15 +908,18 @@ class MainWindow(QMainWindow):
             self.switch_button.hide()
             return
         if isinstance(item, Component):
+            self._refresh_quick_controls(item)
             result = self.engine.solution.branches.get(item.label)
             detail = f"{item.short_description()}\n{item.display_value()}"
             if result is not None:
                 detail += f"\nU = {result.u:.5g} V\nI = {result.i:.5g} A"
+                detail += f"\n{self._calculation_formula(item, result)}"
                 if result.message:
                     detail += f"\n{result.message}"
                 if isinstance(item, Motor):
                     detail += f"\nVitesse = {item.rpm(result.i):.0f} tr/min"
         elif isinstance(item, VoltageArrow):
+            self._refresh_quick_controls(None)
             item.resolve_nodes(self.circuit)
             value = item.voltage(self.engine.solution)
             detail = f"{item.label}\nFlèche de tension orientée A → B"
@@ -682,6 +930,7 @@ class MainWindow(QMainWindow):
             if value is not None:
                 detail += f"\nTension : {value:.5g} V"
         else:
+            self._refresh_quick_controls(None)
             detail = f"Fil {getattr(item, 'label', '')}"
         self.selection_label.setText(detail)
         self.edit_button.setEnabled(isinstance(item, Component))
@@ -691,13 +940,156 @@ class MainWindow(QMainWindow):
             isinstance(item, Component) and bool(item.get_prop("blown"))
         )
         if isinstance(item, Switch):
-            self.switch_button.setText(
-                "Ouvrir l'interrupteur" if item.closed
-                else "Fermer l'interrupteur"
-            )
+            if isinstance(item, PushButton):
+                text = "Relâcher le bouton" if item.closed else "Appuyer sur le bouton"
+            else:
+                text = (
+                    "Ouvrir l'interrupteur" if item.closed
+                    else "Fermer l'interrupteur"
+                )
+            self.switch_button.setText(text)
             self.switch_button.show()
         else:
             self.switch_button.hide()
+
+    def _refresh_quick_controls(self, component: Component | None) -> None:
+        if component is not self._quick_controls_component:
+            while self.quick_controls_layout.count():
+                item = self.quick_controls_layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+            self._quick_parameter_controls.clear()
+            self._quick_controls_component = component
+            if component is not None:
+                specs = component.prop_specs()
+                for name in self.QUICK_PARAMETER_ORDER.get(component.kind, ()):
+                    spec = specs.get(name)
+                    if spec is None or spec.ptype != "float":
+                        continue
+                    self._add_quick_parameter_control(component, name, spec)
+        self.quick_controls_group.setVisible(component is not None
+                                             and bool(self._quick_parameter_controls))
+        if component is not None:
+            self._sync_quick_parameter_controls(component)
+
+    def _add_quick_parameter_control(self, component, name, spec) -> None:
+        low, high = self.QUICK_PARAMETER_RANGES.get(
+            name,
+            (
+                spec.minimum if spec.minimum is not None else float(spec.default) - 10,
+                spec.maximum if spec.maximum is not None else float(spec.default) + 10,
+            ),
+        )
+        value = float(component.get_prop(name))
+        low, high = min(low, value), max(high, value)
+        logarithmic = low > 0 and high / low >= 100
+        if high <= low:
+            high = low + 1.0
+
+        row = QVBoxLayout()
+        row.setSpacing(3)
+        heading = QHBoxLayout()
+        label = QLabel(self.QUICK_PARAMETER_LABELS.get(
+            name, name.replace("_", " ").capitalize()
+        ))
+        label.setObjectName("quickParameterLabel")
+        value_label = QLabel()
+        value_label.setObjectName("quickParameterValue")
+        value_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        heading.addWidget(label)
+        heading.addWidget(value_label, 1)
+        row.addLayout(heading)
+
+        controls = QHBoxLayout()
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(0, 1000)
+        slider.setToolTip(spec.tip or label.text())
+        spinbox = QDoubleSpinBox()
+        spinbox.setRange(
+            spec.minimum if spec.minimum is not None else -1e12,
+            spec.maximum if spec.maximum is not None else 1e12,
+        )
+        precision = (
+            math.ceil(-math.log10(low)) + 2 if low > 0 else 4
+        )
+        spinbox.setDecimals(max(4, spec.decimals, min(12, precision)))
+        spinbox.setSingleStep(spec.step)
+        if spec.unit:
+            spinbox.setSuffix(f" {spec.unit}")
+        spinbox.setFixedWidth(112)
+        controls.addWidget(slider, 1)
+        controls.addWidget(spinbox)
+        row.addLayout(controls)
+
+        container = QWidget()
+        container.setLayout(row)
+        self.quick_controls_layout.addWidget(container)
+        self._quick_parameter_controls[name] = (
+            slider, spinbox, value_label, low, high, logarithmic
+        )
+        slider.valueChanged.connect(
+            lambda position, prop=name, current=component:
+            self._quick_slider_changed(current, prop, position)
+        )
+        spinbox.valueChanged.connect(
+            lambda new_value, prop=name, current=component:
+            self._quick_parameter_changed(current, prop, new_value)
+        )
+        self._sync_quick_parameter_controls(component)
+
+    def _quick_slider_to_value(self, control, position: int) -> float:
+        _, _, _, low, high, logarithmic = control
+        fraction = position / 1000
+        if logarithmic:
+            return low * (high / low) ** fraction
+        return low + (high - low) * fraction
+
+    def _quick_value_to_slider(self, control, value: float) -> int:
+        _, _, _, low, high, logarithmic = control
+        if logarithmic:
+            fraction = math.log(max(value, low) / low) / math.log(high / low)
+        else:
+            fraction = (value - low) / (high - low)
+        return round(max(0.0, min(1.0, fraction)) * 1000)
+
+    def _quick_slider_changed(self, component, name: str, position: int) -> None:
+        control = self._quick_parameter_controls.get(name)
+        if control is None:
+            return
+        value = self._quick_slider_to_value(control, position)
+        spinbox = control[1]
+        spinbox.blockSignals(True)
+        spinbox.setValue(value)
+        spinbox.blockSignals(False)
+        self._quick_parameter_changed(component, name, spinbox.value())
+
+    def _quick_parameter_changed(self, component, name: str, value: float) -> None:
+        if component is not self._quick_controls_component:
+            return
+        try:
+            component.set_prop(name, value)
+        except (ValueError, KeyError) as exc:
+            self.statusBar().showMessage(f"Paramètre invalide : {exc}", 5000)
+            return
+        self.engine.recompute()
+        self.is_dirty = True
+        self._refresh_title()
+        self.refresh_results()
+
+    def _sync_quick_parameter_controls(self, component: Component) -> None:
+        for name, control in self._quick_parameter_controls.items():
+            slider, spinbox, value_label, _, _, _ = control
+            value = float(component.get_prop(name))
+            slider.blockSignals(True)
+            slider.setValue(self._quick_value_to_slider(control, value))
+            slider.blockSignals(False)
+            spinbox.blockSignals(True)
+            spinbox.setValue(value)
+            spinbox.blockSignals(False)
+            spec = component.prop_specs()[name]
+            suffix = f" {spec.unit}" if spec.unit else ""
+            value_label.setText(f"{value:.4g}{suffix}")
 
     def repair_selected_component(self) -> None:
         component = self.canvas.selected
@@ -723,6 +1115,8 @@ class MainWindow(QMainWindow):
         lines = [
             f"<b>{'Transitoire' if solution.mode == 'transient' else 'Régime DC'}</b>",
             f"{len(self.circuit.nodes)} nœud(s) · {self.circuit.mesh_count()} maille(s)",
+            "<i>Calculs : U = Vp − Vn · P = U×I · "
+            "branche résistive : I = U/R</i>",
         ]
         for component in self.circuit.components:
             result = solution.branches.get(component.label)
@@ -731,7 +1125,8 @@ class MainWindow(QMainWindow):
             state = f" — {result.message}" if result.message else ""
             lines.append(
                 f"<b>{component.label}</b>: {result.u:.5g} V · "
-                f"{result.i:.5g} A · {result.p:.5g} W{state}"
+                f"{result.i:.5g} A · {result.p:.5g} W{state}<br>"
+                f"<i>{self._calculation_formula(component, result)}</i>"
             )
         lines.extend(f"<font color='#ff6978'>{error}</font>" for error in solution.errors)
         lines.extend(f"<font color='#ffc857'>{warning}</font>"
@@ -739,6 +1134,59 @@ class MainWindow(QMainWindow):
         self.results_text.setText("<br>".join(lines))
         self.refresh_inspector()
         self.canvas.update()
+
+    @staticmethod
+    def _calculation_formula(
+        component: Component, result: BranchResult
+    ) -> str:
+        u, i, p = result.u, result.i, result.p
+        power = f"P = U×I = {u:.5g}×{i:.5g} = {p:.5g} W"
+        if component.get_prop("blown"):
+            return "I = 0 (branche ouverte)"
+        if isinstance(component, Generator):
+            if component.source_type is SourceType.VOLTAGE:
+                return f"U = Us + ri×I ; {power}"
+            if component.ri == 0:
+                return f"I = −Is ; {power}"
+            return f"I = U/ri − Is ; {power}"
+        if isinstance(component, Fuse):
+            return "I = 0 (fusible ouvert)" if component.blown else (
+                f"I = U/Rf = {u:.5g}/{component.resistance:.5g} A ; {power}"
+            )
+        if isinstance(component, (Diode, Led)):
+            if component.on:
+                return (
+                    f"I = (U−Vf)/Ron = ({u:.5g}−{component.vf:.5g})/"
+                    f"{component.r_on:.5g} A ; {power}"
+                )
+            return f"I ≈ U/Roff ; {power}"
+        if isinstance(component, Motor):
+            return f"I = geq×U + i0 ; {power}"
+        if isinstance(component, Lamp):
+            return f"I = U/R = {u:.5g}/{component.resistance:.5g} A ; {power}"
+        if isinstance(component, Capacitor):
+            return "I = C×dU/dt (transitoire ; I ≈ 0 en DC) ; " + power
+        if isinstance(component, Inductor):
+            return "U = L×dI/dt + Rw×I ; " + power
+        if isinstance(component, Potentiometer):
+            r1, r2 = component.sections
+            return f"I1 = U1/R1 ({r1:.5g} Ω), I2 = U2/R2 ({r2:.5g} Ω) ; {power}"
+        if isinstance(component, Voltmeter):
+            return f"I = U/Rint = {u:.5g}/{component.r_int:.5g} A ; {power}"
+        if isinstance(component, Ammeter):
+            return f"U = I×Rsh = {i:.5g}×{component.r_sh:.5g} V ; {power}"
+        if isinstance(component, Ohmmeter):
+            return f"I = U/Rint − Itest ; {power}"
+        if isinstance(component, Switch):
+            return (
+                f"I = U/Rcontact = {u:.5g}/{component.resistance:.5g} A ; "
+                f"{power}"
+            )
+        if isinstance(component, Resistor):
+            return (
+                f"I = U/R = {u:.5g}/{component.resistance:.5g} A ; {power}"
+            )
+        return f"U = Vp−Vn ; {power}"
 
     def recompute(self) -> None:
         self.engine.recompute()

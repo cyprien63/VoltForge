@@ -11,16 +11,32 @@ import zipfile
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QPoint, Qt, QTimer
+from PyQt6.QtCore import QPoint, QSize, Qt, QTimer
 from PyQt6.QtGui import QIcon, QImage
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import (
-    QApplication, QPlainTextEdit, QPushButton, QMessageBox, QTableWidget,
+    QApplication, QPlainTextEdit, QPushButton, QMessageBox, QScrollArea,
+    QTableWidget,
 )
 from PIL import Image, ImageChops
 
 from core.circuit import Circuit
-from core.components import Battery, Kind, Lamp, Led, Resistor, Switch, Wire
+from core.components import (
+    Battery,
+    Buzzer,
+    Heater,
+    Kind,
+    Lamp,
+    Led,
+    Photoresistor,
+    PushButton,
+    Resistor,
+    Speaker,
+    Switch,
+    Thermistor,
+    Wire,
+    create_component,
+)
 from core.simulation import SimulationEngine
 from core.voltage_arrow import VoltageArrow
 from exporters.gif import export_gif
@@ -52,9 +68,66 @@ class CircuitEditorTests(unittest.TestCase):
         self.assertEqual(len(category_actions), len(window.TOOL_COMPONENTS) + 1)
         self.assertIn((Kind.LED, "LED"), window.TOOL_COMPONENTS)
         self.assertIn((Kind.MOTOR, "Moteur"), window.TOOL_COMPONENTS)
+        self.assertIn((Kind.THERMISTOR, "Thermistance NTC"), window.TOOL_COMPONENTS)
+        self.assertIn((Kind.PHOTORESISTOR, "Photorésistance"), window.TOOL_COMPONENTS)
+        self.assertIn((Kind.PUSH_BUTTON, "Bouton-poussoir"), window.TOOL_COMPONENTS)
         for icon_name in window.ICONS.values():
             icon = QIcon(str(window._icon_path(icon_name)))
             self.assertFalse(icon.isNull(), icon_name)
+        inspector_scroll = window.findChild(QScrollArea, "inspectorScroll")
+        self.assertIsNotNone(inspector_scroll)
+        self.assertEqual(
+            inspector_scroll.horizontalScrollBarPolicy(),
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
+        )
+
+        window.set_theme("light")
+        light_pixel = window._icon("resistor.svg").pixmap(
+            QSize(48, 48)
+        ).toImage().pixelColor(13, 24)
+        window.set_theme("dark")
+        dark_pixel = window._icon("resistor.svg").pixmap(
+            QSize(48, 48)
+        ).toImage().pixelColor(13, 24)
+        self.assertLess(light_pixel.red(), 100)
+        self.assertGreater(dark_pixel.red(), 150)
+
+    def test_added_passive_and_output_components_are_constructible_and_simulated(self) -> None:
+        thermistor = create_component(Kind.THERMISTOR, 0, 0)
+        photoresistor = create_component(Kind.PHOTORESISTOR, 0, 0)
+        heater = create_component(Kind.HEATER, 0, 0)
+        speaker = create_component(Kind.SPEAKER, 0, 0)
+        buzzer = create_component(Kind.BUZZER, 0, 0)
+        push_button = create_component(Kind.PUSH_BUTTON, 0, 0)
+
+        self.assertIsInstance(thermistor, Thermistor)
+        self.assertIsInstance(photoresistor, Photoresistor)
+        self.assertIsInstance(heater, Heater)
+        self.assertIsInstance(speaker, Speaker)
+        self.assertIsInstance(buzzer, Buzzer)
+        self.assertIsInstance(push_button, PushButton)
+        self.assertGreater(thermistor.resistance, 0)
+        self.assertGreater(photoresistor.resistance, 0)
+        cold_resistance = thermistor.resistance
+        thermistor.set_prop("temperature", 80)
+        self.assertLess(thermistor.resistance, cold_resistance)
+        dark_resistance = photoresistor.resistance
+        photoresistor.set_prop("illumination", 1000)
+        self.assertLess(photoresistor.resistance, dark_resistance)
+        self.assertFalse(push_button.closed)
+        self.assertAlmostEqual(speaker.resistance, 8.0)
+
+        circuit = Circuit()
+        circuit.add(Battery(-80, 0, rotation=90, voltage=9, p_max=100))
+        circuit.add(heater)
+        circuit.add_wire([(-80, -20), (-20, -20), (-20, 0)])
+        circuit.add_wire([(-80, 20), (20, 20), (20, 0)])
+        solution = SimulationEngine(circuit).recompute()
+
+        self.assertTrue(solution.solved, solution.errors)
+        self.assertIn(heater.label, solution.branches)
+        restored = Circuit.from_dict(circuit.to_dict())
+        self.assertIsInstance(restored.get(heater.label), Heater)
 
     def test_battery_negative_terminal_is_grounded_and_simulated(self) -> None:
         circuit = Circuit()
@@ -112,6 +185,15 @@ class CircuitEditorTests(unittest.TestCase):
         self.assertEqual(resistor.position, (40.0, 0.0))
         self.assertEqual(wire.points[0], (60, 0))
 
+        moved_path = canvas._move_wire_endpoint(
+            [(60, 0), (80, 0)], 0, (60, 40)
+        )
+        self.assertEqual(moved_path, [(60, 40), (80, 40), (80, 0)])
+        self.assertTrue(all(
+            x1 == x2 or y1 == y2
+            for (x1, y1), (x2, y2) in zip(moved_path, moved_path[1:])
+        ))
+
         canvas.rotate_component(resistor)
         self.assertEqual(resistor.rotation, 90)
         self.assertEqual(wire.points[0], (40, 20))
@@ -141,6 +223,29 @@ class CircuitEditorTests(unittest.TestCase):
         self.assertEqual(loose_wire.points[0], (-80, 80))
         QTest.keyClick(canvas, Qt.Key.Key_Delete)
         self.assertNotIn(loose_wire, window.circuit.wires)
+
+    def test_diagonal_component_drag_keeps_attached_wire_orthogonal(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        resistor = window.circuit.add(Resistor(0, 0))
+        wire = window.circuit.add_wire([(20, 0), (80, 0)])
+        window.resize(900, 650)
+        window.show()
+        self.app.processEvents()
+        canvas = window.canvas
+        center = QPoint(canvas.width() // 2, canvas.height() // 2)
+
+        QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=center)
+        QTest.mouseMove(canvas, center + QPoint(40, 40))
+        QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton,
+                           pos=center + QPoint(40, 40))
+
+        self.assertEqual(resistor.position, (40.0, 40.0))
+        self.assertEqual(wire.points, [(60, 40), (80, 40), (80, 0)])
+        self.assertTrue(all(
+            x1 == x2 or y1 == y2
+            for (x1, y1), (x2, y2) in zip(wire.points, wire.points[1:])
+        ))
 
     def test_marquee_select_moves_and_deletes_multiple_elements(self) -> None:
         window = MainWindow()
@@ -533,6 +638,19 @@ class CircuitEditorTests(unittest.TestCase):
         dialog.calculate()
         self.assertAlmostEqual(float(dialog.fields["r"].text()), 24)
         self.assertAlmostEqual(float(dialog.fields["p"].text()), 6)
+        self.assertIn("R = U/I", dialog.result.text())
+
+    def test_simulation_results_show_the_equation_used_for_each_component(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        resistor = window.circuit.add(Resistor(0, 0, resistance=100))
+        window.engine.recompute()
+        window.refresh_results()
+
+        self.assertIn(
+            f"I = U/R = 0/100 A", window.results_text.text()
+        )
+        self.assertIn("P = U×I", window.results_text.text())
 
     def test_simulation_dialog_uses_parameter_form_not_script_editor(self) -> None:
         window = MainWindow()
@@ -641,6 +759,41 @@ class CircuitEditorTests(unittest.TestCase):
         self.assertTrue(battery.get_prop("blown"))
         self.assertEqual(short_solution.branches[battery.label].state, "blown")
 
+    def test_overloaded_resistor_burns_from_dissipated_power(self) -> None:
+        circuit = Circuit()
+        battery = circuit.add(Battery(-40, 0, voltage=12, ri=0.1, p_max=100))
+        resistor = circuit.add(Resistor(40, 0, resistance=10, p_max=1))
+        circuit.add_wire([(-60, 0), (-60, -40), (20, -40), (20, 0)])
+        circuit.add_wire([(-20, 0), (-20, 40), (60, 40), (60, 0)])
+
+        solution = SimulationEngine(circuit).recompute()
+
+        self.assertTrue(solution.solved, solution.errors)
+        self.assertTrue(resistor.get_prop("blown"))
+        self.assertEqual(solution.branches[resistor.label].state, "blown")
+
+    def test_components_burned_during_transient_remain_burned(self) -> None:
+        circuit = Circuit()
+        battery = circuit.add(Battery(-40, 0, voltage=9, ri=0.1,
+                                     label="BAT_TRANSIENT"))
+        lamp = circuit.add(Lamp(40, 0, resistance=50, u_rated=5, p_max=10))
+        circuit.add_wire([(-60, 0), (-60, -40), (20, -40), (20, 0)])
+        circuit.add_wire([(-20, 0), (-20, 40), (60, 40), (60, 0)])
+        engine = SimulationEngine(circuit)
+        program = engine.load_program(
+            "loop 0s 0.1s\nfps 10\ndt 10ms\n"
+            "t=0s: BAT_TRANSIENT.voltage=220V"
+        )
+
+        engine.begin_transient(program)
+        self.assertTrue(lamp.get_prop("blown"))
+        engine.advance(0.1)
+        engine.end_transient()
+
+        self.assertEqual(battery.voltage, 9)
+        self.assertTrue(lamp.get_prop("blown"))
+        self.assertTrue(battery.get_prop("blown"))
+
     def test_project_is_saved_as_styled_voltforge_archive(self) -> None:
         window = MainWindow()
         self.addCleanup(window.close)
@@ -677,6 +830,8 @@ class CircuitEditorTests(unittest.TestCase):
         self.assertIn("23.33 Ω", dialog.result.text())
         self.assertIn("27 Ω", dialog.result.text())
         self.assertIn("5 W", dialog.result.text())
+        self.assertIn("R = (12 − 5)/0.3", dialog.result.text())
+        self.assertIn("PR =", dialog.result.text())
         dialog.close()
 
     def test_dirty_close_offers_save_discard_or_cancel(self) -> None:
@@ -706,6 +861,58 @@ class CircuitEditorTests(unittest.TestCase):
         window.repair_button.click()
         self.assertFalse(lamp.get_prop("blown"))
         self.assertTrue(window.repair_button.isHidden())
+
+    def test_selected_lamp_has_live_slider_parameter_controls(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        battery = window.circuit.add(
+            Battery(-80, 0, rotation=90, voltage=9, p_max=100)
+        )
+        lamp = window.circuit.add(Lamp(0, 0))
+        window.circuit.add_wire([(-80, -20), (-20, -20), (-20, 0)])
+        window.circuit.add_wire([(-80, 20), (20, 20), (20, 0)])
+        window.engine.recompute()
+        initial_current = window.engine.solution.branches[lamp.label].i
+
+        window.canvas.set_selection(lamp)
+        window.refresh_inspector()
+
+        self.assertFalse(window.quick_controls_group.isHidden())
+        self.assertEqual(
+            set(window._quick_parameter_controls),
+            {"resistance", "u_rated", "p_max"},
+        )
+        resistance_slider, resistance_editor, _, _, _, _ = (
+            window._quick_parameter_controls["resistance"]
+        )
+        resistance_editor.setValue(25)
+
+        self.assertEqual(lamp.resistance, 25)
+        self.assertNotEqual(
+            window.engine.solution.branches[lamp.label].i, initial_current
+        )
+        self.assertAlmostEqual(
+            window.engine.solution.branches[lamp.label].i,
+            abs(window.engine.solution.branches[battery.label].i),
+            places=5,
+        )
+        self.assertTrue(window.is_dirty)
+        self.assertIn("I = U/R", window.selection_label.text())
+        current_after_numeric_entry = window.engine.solution.branches[lamp.label].i
+
+        resistance_slider.setValue(400)
+
+        self.assertGreater(lamp.resistance, 3)
+        self.assertLess(lamp.resistance, 5)
+        self.assertNotEqual(
+            window.engine.solution.branches[lamp.label].i,
+            current_after_numeric_entry,
+        )
+
+        window.set_theme("light")
+        self.assertIn("#f3f6fb", window.styleSheet())
+        window.set_theme("dark")
+        self.assertIn("#111a24", window.styleSheet())
 
 
 if __name__ == "__main__":

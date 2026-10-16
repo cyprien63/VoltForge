@@ -14,3 +14,9 @@ au moteur `SimulationEngine`. Conserver les mutations d'événements typées via
 Ajouter des composants dans `core/components.py`, compléter leur estampillage
 dans `core/solver.py`, et vérifier sérialisation, affichage et édition des
 propriétés.
+
+Les composants `Thermistor` (modèle bêta NTC) et `Photoresistor` (résistance
+statique selon l'éclairement) sont des résistances commandées par leurs
+paramètres d'environnement. `Heater`, `Speaker` et `Buzzer` sont des charges
+résistives DC simplifiées ; ne pas présenter leur simulation comme un modèle
+thermique ou acoustique.

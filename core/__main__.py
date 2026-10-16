@@ -189,7 +189,9 @@ def test_dc_basic() -> None:
     # Source de courant idéale : I = 2 A dans 10 Ω -> 20 V
     c = Circuit()
     _, (r,) = build_series(c, source_type="current", current=2.0, ri=0.0,
-                           devices=[(Kind.RESISTOR, {"resistance": 10.0}, 0)])
+                           devices=[(Kind.RESISTOR, {
+                               "resistance": 10.0, "p_max": 100.0,
+                           }, 0)])
     s3 = solve(c)
     check("source courant : U(R1) = 20 V", s3.branch(r.label).u, 20.0, 1e-6)
     check("source courant : I = 2 A", abs(s3.branch(r.label).i), 2.0, 1e-6)
@@ -365,8 +367,9 @@ def test_states() -> None:
     reset_labels()
 
     c = Circuit()
-    _, (r,) = build_series(c, voltage=12.0, devices=[
+    g, (r,) = build_series(c, voltage=12.0, devices=[
         (Kind.RESISTOR, {"resistance": 1e-3, "p_max": 1e6}, 0)])
+    g.set_prop("p_max", 1e6)
     s = solve(c)
     check("court-circuit détecté", s.branch(r.label).state, "fault")
     check("court-circuit : avertissement global",
@@ -376,7 +379,8 @@ def test_states() -> None:
     _, (r,) = build_series(c, voltage=12.0, devices=[
         (Kind.RESISTOR, {"resistance": 10.0, "p_max": 1.0}, 0)])
     s2 = solve(c)
-    check("dépassement de puissance", s2.branch(r.label).state, "power")
+    check("dépassement de puissance : composant grillé",
+          s2.branch(r.label).state, "blown")
 
     # Terminal non connecté : un seul fil relie G1.n à R1.p
     c = Circuit()
@@ -424,7 +428,7 @@ t=3.0 : G1.voltage = 6
     check("scénario : nombre + unité", prog.events[2].value, 12.0)
     check("scénario : alias 'K1.closed' -> 'closed'", prog.events[3].prop, "closed")
     check("scénario : durée = plage loop", prog.duration, 4.0)
-    check("scénario : nombre d'images", prog.frame_count, 81)
+    check("scénario : nombre d'images", prog.frame_count, 80)
 
     bad = "t=0: G1.voltage = 5\nfps abc\nt=x: R1.resistance=10\nR1.truc = 3"
     prog2, errors2 = parse_scenario(bad)

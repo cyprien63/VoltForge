@@ -13,6 +13,7 @@ from core.circuit import Circuit
 from core.components import (
     Ammeter,
     Battery,
+    Buzzer,
     Capacitor,
     Component,
     CustomComponent,
@@ -20,15 +21,20 @@ from core.components import (
     Fuse,
     Generator,
     Ground,
+    Heater,
     Inductor,
     Kind,
     Lamp,
     Led,
     Motor,
     Ohmmeter,
+    Photoresistor,
     Potentiometer,
+    PushButton,
     Resistor,
+    Speaker,
     Switch,
+    Thermistor,
     Voltmeter,
     Wire,
     create_component,
@@ -502,6 +508,33 @@ class CircuitCanvas(QWidget):
                 painter.setFont(font)
                 painter.drawText(QRectF(-13, -7, 26, 14),
                                  Qt.AlignmentFlag.AlignCenter, comp.symbol[:4])
+            elif isinstance(comp, Thermistor):
+                painter.drawLine(-10, 12, 10, -12)
+                painter.drawLine(5, -12, 10, -12)
+                painter.drawLine(10, -12, 10, -7)
+            elif isinstance(comp, Photoresistor):
+                painter.drawLine(-12, 14, 8, -6)
+                painter.drawLine(8, -6, 2, -6)
+                painter.drawLine(8, -6, 8, 0)
+                painter.drawLine(-8, 18, 12, -2)
+                painter.drawLine(12, -2, 6, -2)
+                painter.drawLine(12, -2, 12, 4)
+            elif isinstance(comp, Heater):
+                painter.drawLine(-8, -3, -4, 3)
+                painter.drawLine(-4, 3, 0, -3)
+                painter.drawLine(0, -3, 4, 3)
+                painter.drawLine(4, 3, 8, -3)
+            elif isinstance(comp, Speaker):
+                painter.drawLine(-8, -6, 2, -6)
+                painter.drawLine(2, -6, 10, -13)
+                painter.drawLine(10, -13, 10, 13)
+                painter.drawLine(10, 13, 2, 6)
+                painter.drawLine(2, 6, -8, 6)
+                painter.drawArc(QRectF(6, -14, 24, 28), -55 * 16, 110 * 16)
+            elif isinstance(comp, Buzzer):
+                painter.drawEllipse(QRectF(-8, -8, 16, 16))
+                painter.drawText(QRectF(-8, -7, 16, 14),
+                                 Qt.AlignmentFlag.AlignCenter, "B")
         elif isinstance(comp, Potentiometer):
             painter.drawRect(QRectF(-14, -8, 28, 16))
             level_x = round(-15 + 30 * comp.level)
@@ -1006,11 +1039,16 @@ class CircuitCanvas(QWidget):
                     wire.points = [(px + dx, py + dy)
                                    for px, py in original_points]
                 else:
-                    wire.points = [
-                        moved_by_terminal.get(point, point)
-                        for point in original_points
-                    ]
-                wire.points = self._orthogonalize(wire.points)
+                    points = list(original_points)
+                    for index, point in enumerate(original_points):
+                        moved = moved_by_terminal.get(point)
+                        if moved is None:
+                            continue
+                        if index in (0, len(points) - 1):
+                            points = self._move_wire_endpoint(points, index, moved)
+                        else:
+                            points[index] = moved
+                    wire.points = self._orthogonalize(points)
             self.circuit.recompute_nodes()
             self.update()
         elif self._dragging and isinstance(self.selected, Wire) and \
@@ -1290,4 +1328,33 @@ class CircuitCanvas(QWidget):
                 result.append((point[0], previous[1]))
             if result[-1] != point:
                 result.append(point)
-        return result
+        compact = [result[0]]
+        for point in result[1:]:
+            while len(compact) >= 2:
+                first, middle = compact[-2], compact[-1]
+                if (first[0] == middle[0] == point[0]
+                        or first[1] == middle[1] == point[1]):
+                    compact.pop()
+                else:
+                    break
+            if point != compact[-1]:
+                compact.append(point)
+        return compact
+
+    @staticmethod
+    def _move_wire_endpoint(
+        points: list[tuple[int, int]], index: int, moved: tuple[int, int]
+    ) -> list[tuple[int, int]]:
+        if len(points) < 2 or points[index] == moved:
+            return list(points)
+        updated = list(points)
+        old = updated[index]
+        neighbor_index = 1 if index == 0 else len(updated) - 2
+        neighbor = updated[neighbor_index]
+        if old[0] == neighbor[0]:
+            bend = (moved[0], neighbor[1])
+        else:
+            bend = (neighbor[0], moved[1])
+        if index == 0:
+            return [moved, bend, *updated[1:]]
+        return [*updated[:-1], bend, moved]

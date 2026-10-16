@@ -1,15 +1,16 @@
-"""VoltForge — Modèle de composants électriques normalisés.
+"""VoltForge — Modèle de composants électriques usuels.
 
-Catalogue complet (17 types) :
+Catalogue (23 types) :
 
 =======  ===========================================================
 Sources  Générateur (tension / courant), pile
-Passifs  Résistance personnalisable, Potentiomètre, Condensateur, Bobine
+Passifs  Résistance, NTC, photorésistance, potentiomètre, interrupteur,
+         bouton-poussoir, condensateur, bobine
 Semi-    Diode, LED
 conduct.
-Énergie  Lampe, Moteur, Fusible
-Outils   Voltmètre, Ampèremètre, Ohmmètre
-Topo.    Masse (référence 0 V), Fil de connexion
+Énergie  Lampe, moteur, chauffage, haut-parleur, buzzer, fusible
+Outils   Voltmètre, ampèremètre, ohmmètre
+Topo.    Masse (référence 0 V), fil de connexion
 =======  ===========================================================
 
 Chaque composant est décrit par sa position centrale (grille de 20 px),
@@ -76,8 +77,14 @@ class Kind(str, Enum):
     # Passifs
     RESISTOR = "resistor"
     CUSTOM = "custom"
+    THERMISTOR = "thermistor"
+    PHOTORESISTOR = "photoresistor"
+    HEATER = "heater"
+    SPEAKER = "speaker"
+    BUZZER = "buzzer"
     POTENTIOMETER = "potentiometer"
     SWITCH = "switch"
+    PUSH_BUTTON = "push_button"
     CAPACITOR = "capacitor"
     INDUCTOR = "inductor"
     # Semi-conducteurs
@@ -108,8 +115,14 @@ _KIND_LABELS = {
     "battery": "Pile",
     "resistor": "Résistance",
     "custom": "Composant personnalisé",
+    "thermistor": "Thermistance",
+    "photoresistor": "Photorésistance",
+    "heater": "Résistance chauffante",
+    "speaker": "Haut-parleur",
+    "buzzer": "Buzzer",
     "potentiometer": "Potentiomètre",
     "switch": "Interrupteur",
+    "push_button": "Bouton-poussoir",
     "capacitor": "Condensateur",
     "inductor": "Bobine",
     "diode": "Diode",
@@ -497,6 +510,149 @@ class Resistor(Component):
         return si_format(self.resistance, "Ω")
 
 
+class Thermistor(Resistor):
+    """Thermistance NTC au modèle bêta simplifié, température réglable."""
+
+    kind = Kind.THERMISTOR
+    prefix = "NTC"
+    PROPS = OrderedDict(
+        label=Prop("", ptype="str", group="Identité"),
+        r_ref=Prop(10_000.0, unit="Ω", minimum=1.0, maximum=1e9,
+                   step=100.0, group="Modèle"),
+        temperature=Prop(25.0, unit="°C", minimum=-40.0, maximum=150.0,
+                         step=1.0, group="Environnement"),
+        beta=Prop(3950.0, unit="K", minimum=100.0, maximum=10_000.0,
+                  step=50.0, group="Modèle"),
+        p_max=Prop(0.5, unit="W", minimum=0.0, maximum=1e6,
+                   step=0.1, group="Limites"),
+    )
+
+    @property
+    def resistance(self) -> float:
+        kelvin = max(self.temperature + 273.15, 1.0)
+        reference = 298.15
+        exponent = self.beta * (1.0 / kelvin - 1.0 / reference)
+        return max(1e-3, self.r_ref * math.exp(max(-50.0, min(50.0, exponent))))
+
+    @property
+    def r_ref(self) -> float:
+        return float(self._props["r_ref"])
+
+    @property
+    def temperature(self) -> float:
+        return float(self._props["temperature"])
+
+    @property
+    def beta(self) -> float:
+        return float(self._props["beta"])
+
+    def display_value(self) -> str:
+        return f"{si_format(self.resistance, 'Ω')} · {self.temperature:g} °C"
+
+
+class Photoresistor(Resistor):
+    """Photorésistance à éclairement imposé, modèle statique réglable."""
+
+    kind = Kind.PHOTORESISTOR
+    prefix = "LDR"
+    PROPS = OrderedDict(
+        label=Prop("", ptype="str", group="Identité"),
+        dark_resistance=Prop(1_000_000.0, unit="Ω", minimum=1.0,
+                             maximum=1e12, step=1000.0, group="Modèle"),
+        illumination=Prop(100.0, unit="lx", minimum=0.0, maximum=100_000.0,
+                          step=10.0, group="Environnement"),
+        sensitivity=Prop(0.8, minimum=0.1, maximum=2.0, step=0.05,
+                         group="Modèle"),
+        p_max=Prop(0.25, unit="W", minimum=0.0, maximum=1e6,
+                   step=0.05, group="Limites"),
+    )
+
+    @property
+    def resistance(self) -> float:
+        ratio = max(self.illumination / 10.0, 0.0)
+        return max(1.0, self.dark_resistance / (1.0 + ratio ** self.sensitivity))
+
+    @property
+    def dark_resistance(self) -> float:
+        return float(self._props["dark_resistance"])
+
+    @property
+    def illumination(self) -> float:
+        return float(self._props["illumination"])
+
+    @property
+    def sensitivity(self) -> float:
+        return float(self._props["sensitivity"])
+
+    def display_value(self) -> str:
+        return f"{si_format(self.resistance, 'Ω')} · {self.illumination:g} lx"
+
+
+class Heater(Resistor):
+    """Charge résistive chauffante (modèle électrique DC)."""
+
+    kind = Kind.HEATER
+    prefix = "HTR"
+    PROPS = OrderedDict(
+        label=Prop("", ptype="str", group="Identité"),
+        resistance=Prop(24.0, unit="Ω", minimum=0.1, maximum=1e6,
+                        step=1.0, group="Valeur"),
+        p_max=Prop(100.0, unit="W", minimum=0.0, maximum=1e6,
+                   step=5.0, group="Limites"),
+    )
+
+    @property
+    def resistance(self) -> float:
+        return float(self._props["resistance"])
+
+    def display_value(self) -> str:
+        return f"{si_format(self.resistance, 'Ω')} · {self.get_prop('p_max'):g} W max"
+
+
+class Speaker(Resistor):
+    """Haut-parleur représenté par son impédance nominale en modèle DC."""
+
+    kind = Kind.SPEAKER
+    prefix = "SPK"
+    PROPS = OrderedDict(
+        label=Prop("", ptype="str", group="Identité"),
+        resistance=Prop(8.0, unit="Ω", minimum=1.0, maximum=1000.0,
+                        step=1.0, group="Impédance"),
+        p_max=Prop(10.0, unit="W", minimum=0.0, maximum=1e6,
+                   step=1.0, group="Limites"),
+    )
+
+    @property
+    def resistance(self) -> float:
+        return float(self._props["resistance"])
+
+    def display_value(self) -> str:
+        return f"{si_format(self.resistance, 'Ω')} · modèle DC"
+
+
+class Buzzer(Resistor):
+    """Buzzer actif simplifié par sa résistance d'entrée en régime DC."""
+
+    kind = Kind.BUZZER
+    prefix = "BZ"
+    PROPS = OrderedDict(
+        label=Prop("", ptype="str", group="Identité"),
+        resistance=Prop(100.0, unit="Ω", minimum=1.0, maximum=100_000.0,
+                        step=10.0, group="Valeur"),
+        voltage=Prop(5.0, unit="V", minimum=1.0, maximum=48.0,
+                     step=0.5, group="Limites"),
+        p_max=Prop(1.0, unit="W", minimum=0.0, maximum=1e6,
+                   step=0.1, group="Limites"),
+    )
+
+    @property
+    def resistance(self) -> float:
+        return float(self._props["resistance"])
+
+    def display_value(self) -> str:
+        return f"{si_format(self.resistance, 'Ω')} · {self.voltage:g} V max"
+
+
 class CustomComponent(Resistor):
     """Composant personnalisé défini comme une résistance à deux bornes."""
 
@@ -599,6 +755,24 @@ class Switch(Component):
 
     def display_value(self) -> str:
         return "Fermé" if self.closed else "Ouvert"
+
+
+class PushButton(Switch):
+    """Bouton-poussoir à contact normalement ouvert."""
+
+    kind = Kind.PUSH_BUTTON
+    prefix = "BP"
+    PROPS = OrderedDict(
+        label=Prop("", ptype="str", group="Identité"),
+        closed=Prop(False, ptype="bool", group="État",
+                    tip="État du contact (double-clic pour basculer)"),
+        r_on=Prop(0.01, unit="Ω", minimum=1e-6, maximum=1.0,
+                  step=0.001, group="Contact"),
+        r_off=Prop(1e6, unit="Ω", minimum=1e3, maximum=1e12,
+                   step=1e5, group="Contact"),
+        p_max=Prop(10.0, unit="W", minimum=0.0, maximum=1e6,
+                   step=1.0, group="Limites"),
+    )
 
 
 class Capacitor(Component):
@@ -1001,8 +1175,14 @@ _KIND_TABLE = {
     Kind.BATTERY: Battery,
     Kind.RESISTOR: Resistor,
     Kind.CUSTOM: CustomComponent,
+    Kind.THERMISTOR: Thermistor,
+    Kind.PHOTORESISTOR: Photoresistor,
+    Kind.HEATER: Heater,
+    Kind.SPEAKER: Speaker,
+    Kind.BUZZER: Buzzer,
     Kind.POTENTIOMETER: Potentiometer,
     Kind.SWITCH: Switch,
+    Kind.PUSH_BUTTON: PushButton,
     Kind.CAPACITOR: Capacitor,
     Kind.INDUCTOR: Inductor,
     Kind.DIODE: Diode,

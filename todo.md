@@ -95,3 +95,5 @@
   annoté avec nomenclature et tableau des valeurs.
 - [ ] Ajouter des raccourcis configurables et une recherche rapide d'outils,
   composants et commandes.
+- [ ] Ajouter le courant AC et DC 
+- [ ] Ajouter un osciloscope pour fair les simulation 

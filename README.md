@@ -11,9 +11,10 @@ exporter des schémas statiques ou des animations de scénarios.
   orientées.
 - Repérage automatique A, B, C… des nœuds, renommage manuel, visualisation
   des nœuds et mise en évidence des mailles indépendantes.
-- Générateur, pile, résistance IEC, potentiomètre, interrupteur, condensateur,
-  bobine, diode, LED, lampe, moteur, fusible, masse, voltmètre, ampèremètre,
-  ohmmètre et composants personnalisés résistifs.
+- Générateur, pile, résistance, thermistance NTC, photorésistance,
+  potentiomètre, interrupteur, bouton-poussoir, condensateur, bobine, diode,
+  LED, lampe, moteur, résistance chauffante, haut-parleur, buzzer, fusible,
+  masse, instruments de mesure et composants personnalisés.
 - Pack d'icônes SVG cohérent dans `assets/icons/`, utilisé par la barre
   d'outils unique.
 - Résolution DC et transitoire (Euler implicite pour C et L), mesures de
@@ -47,6 +48,15 @@ de tour. En mode **Sélection**, glissez sur une zone vide pour sélectionner
 plusieurs éléments, puis glissez l'un d'eux pour les déplacer ensemble.
 `Ctrl+A` sélectionne tout et `Delete` supprime la sélection. Cliquez un seul
 composant pour le déplacer ; utilisez `R` ou **Tourner**.
+Quand un composant est sélectionné, le panneau **Réglage en direct** propose
+des curseurs et des champs numériques pour ses paramètres principaux : les
+tensions, courants et états se recalculent immédiatement sans ouvrir l'éditeur
+de propriétés avancées.
+La thermistance utilise un modèle bêta NTC à température réglable ; la
+photorésistance suit l'éclairement saisi. Résistance chauffante, haut-parleur et
+buzzer sont simulés en DC par leur résistance/impédance équivalente : la
+simulation ne modélise pas leur acoustique, leur température ni leur réponse en
+fréquence.
 Sélectionnez un fil pour le déplacer, attrapez un de ses ronds d'extrémité
 pour le rerouter, ou faites un clic droit pour le supprimer. Le bouton milieu
 ou `Espace` + glisser déplace le plan de travail ; la molette règle le zoom.
@@ -66,8 +76,10 @@ Les propriétés de chaque composant exposent sa tension maximale et son état
 « grillé » ; les lampes utilisent aussi leur tension nominale. Une surcharge
 grille le composant durablement : sélectionnez-le puis utilisez **Réparer le
 composant** dans l'inspecteur. Un court-circuit de générateur ou de pile le
-grille également. Le compteur de nœuds et de mailles reste visible sur le
-canevas ; activez les repères de nœuds pour voir leurs noms sur le circuit.
+grille également. Un composant qui grille pendant une simulation reste grillé
+après la restauration des paramètres du scénario. Le compteur de nœuds et de
+mailles reste visible sur le canevas ; activez les repères de nœuds pour voir
+leurs noms sur le circuit.
 Le menu **Affichage > Thème** bascule entre les thèmes clair et sombre.
 
 Le menu **Simulation > Configurer / lancer** permet de choisir une durée, la
@@ -77,7 +89,9 @@ simulation ou à exporter un GIF, sans écrire de scénario. Le **Calculateur lo
 d'Ohm** déduit U, I, R et P à partir de deux valeurs saisies.
 L'outil **Calculer une résistance de protection** estime une résistance série
 normalisée et sa puissance minimale à partir des caractéristiques de la source
-et du récepteur.
+et du récepteur. Les deux calculateurs affichent les formules et les
+substitutions numériques ; le panneau de résultats détaille aussi les équations
+utilisées pour chaque branche du circuit.
 
 Les projets se sauvegardent au format VoltForge `.voltforge` (archive de projet,
 distincte d'un fichier JSON). Les anciens projets JSON restent importables. Si
