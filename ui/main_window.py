@@ -645,9 +645,14 @@ class MainWindow(QMainWindow):
         right.setMinimumWidth(280)
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(4, 4, 4, 4)
-        self.selection_group = QGroupBox("Propriétés")
+        self.selection_group = QGroupBox("Sélection")
         self.selection_layout = QVBoxLayout(self.selection_group)
+        self.selection_title = QLabel("Aucun élément sélectionné")
+        self.selection_title.setObjectName("selectionTitle")
+        self.selection_title.setWordWrap(True)
+        self.selection_layout.addWidget(self.selection_title)
         self.selection_label = QLabel("Aucun élément sélectionné")
+        self.selection_label.setObjectName("selectionDetail")
         self.selection_label.setWordWrap(True)
         self.selection_layout.addWidget(self.selection_label)
         self.quick_controls_group = QGroupBox("Réglage en direct")
@@ -919,6 +924,7 @@ class MainWindow(QMainWindow):
         selected_count = len(self.canvas.selected_items)
         if selected_count > 1:
             self._refresh_quick_controls(None)
+            self.selection_title.setText("Sélection multiple")
             self.selection_label.setText(
                 f"{selected_count} éléments sélectionnés\n"
                 "Faites glisser pour les déplacer ensemble ; Supprimer pour tout effacer."
@@ -931,10 +937,12 @@ class MainWindow(QMainWindow):
             return
         if item is None:
             self._refresh_quick_controls(None)
+            self.selection_title.setText("Aucune sélection")
             self.selection_label.setText(
                 f"{len(self.circuit.components)} composant(s), "
                 f"{len(self.circuit.wires)} fil(s), {len(self.circuit.nodes)} nœud(s), "
-                f"{self.circuit.mesh_count()} maille(s)"
+                f"{self.circuit.mesh_count()} maille(s)\n"
+                "Cliquez sur un élément pour afficher ses détails."
             )
             self.edit_button.setEnabled(False)
             self.rotate_button.setEnabled(False)
@@ -945,19 +953,23 @@ class MainWindow(QMainWindow):
         if isinstance(item, Component):
             self._refresh_quick_controls(item)
             result = self.engine.solution.branches.get(item.label)
-            detail = f"{item.short_description()}\n{item.display_value()}"
+            self.selection_title.setText(item.short_description())
+            lines = [item.display_value()]
             if result is not None:
-                detail += f"\nU = {result.u:.5g} V\nI = {result.i:.5g} A"
-                detail += f"\n{self._calculation_formula(item, result)}"
+                lines.append(f"U = {result.u:.5g} V")
+                lines.append(f"I = {result.i:.5g} A")
+                lines.append(self._calculation_formula(item, result))
                 if result.message:
-                    detail += f"\n{result.message}"
+                    lines.append(result.message)
                 if isinstance(item, Motor):
-                    detail += f"\nVitesse = {item.rpm(result.i):.0f} tr/min"
+                    lines.append(f"Vitesse = {item.rpm(result.i):.0f} tr/min")
+            detail = "\n".join(line for line in lines if line)
         elif isinstance(item, VoltageArrow):
             self._refresh_quick_controls(None)
             item.resolve_nodes(self.circuit)
             value = item.voltage(self.engine.solution)
-            detail = f"{item.label}\nFlèche de tension orientée A → B"
+            self.selection_title.setText(item.label)
+            detail = "Flèche de tension orientée A → B"
             if item.node_a in self.circuit.nodes:
                 detail += f"\nNœud de départ : {self.circuit.nodes[item.node_a].name}"
             if item.node_b in self.circuit.nodes:
@@ -966,7 +978,8 @@ class MainWindow(QMainWindow):
                 detail += f"\nTension : {value:.5g} V"
         else:
             self._refresh_quick_controls(None)
-            detail = f"Fil {getattr(item, 'label', '')}"
+            self.selection_title.setText("Fil")
+            detail = f"{getattr(item, 'label', '')}"
         self.selection_label.setText(detail)
         self.edit_button.setEnabled(isinstance(item, Component))
         self.rotate_button.setEnabled(isinstance(item, Component))
