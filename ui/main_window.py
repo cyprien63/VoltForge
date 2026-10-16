@@ -1036,9 +1036,9 @@ class MainWindow(QMainWindow):
             self.selection_label.setText(
                 "Aucun élément sélectionné"
                 f"\n<br><span style='color:{muted}'>"
-                f"{len(self.circuit.components)} composant(s), "
-                f"{len(self.circuit.wires)} fil(s), "
-                f"{len(self.circuit.nodes)} nœud(s), "
+                f"{len(self.circuit.components)} composant(s) · "
+                f"{len(self.circuit.wires)} fil(s) · "
+                f"{len(self.circuit.nodes)} nœud(s) · "
                 f"{self.circuit.mesh_count()} maille(s)</span>"
             )
             self.edit_button.setEnabled(False)
