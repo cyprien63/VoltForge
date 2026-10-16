@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -666,51 +667,87 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.canvas)
 
         right = QWidget()
-        right.setMinimumWidth(280)
+        right.setObjectName("inspectorPanel")
+        right.setMinimumWidth(300)
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(4, 4, 4, 4)
+        right_layout.setContentsMargins(14, 14, 14, 14)
+        right_layout.setSpacing(12)
+
+        panel_title = QLabel("Inspecteur")
+        panel_title.setObjectName("panelTitle")
+        right_layout.addWidget(panel_title)
+        panel_rule = QFrame()
+        panel_rule.setObjectName("panelRule")
+        panel_rule.setFrameShape(QFrame.Shape.HLine)
+        panel_rule.setFixedHeight(1)
+        right_layout.addWidget(panel_rule)
+
         self.selection_group = QGroupBox("Propriétés")
         self.selection_layout = QVBoxLayout(self.selection_group)
+        self.selection_layout.setSpacing(10)
         self.selection_label = QLabel("Aucun élément sélectionné")
+        self.selection_label.setObjectName("selectionSummary")
         self.selection_label.setWordWrap(True)
+        self.selection_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
         self.selection_layout.addWidget(self.selection_label)
-        self.quick_controls_group = QGroupBox("Réglage en direct")
+
+        self.quick_controls_group = QWidget()
+        self.quick_controls_group.setObjectName("quickControls")
         quick_layout = QVBoxLayout(self.quick_controls_group)
-        quick_layout.setContentsMargins(10, 12, 10, 8)
+        quick_layout.setContentsMargins(12, 10, 12, 12)
+        quick_layout.setSpacing(8)
+        quick_title = QLabel("Réglage en direct")
+        quick_title.setObjectName("sectionTitle")
+        quick_layout.addWidget(quick_title)
         quick_hint = QLabel("Les résultats se recalculent pendant le réglage.")
         quick_hint.setObjectName("mutedText")
         quick_hint.setWordWrap(True)
         quick_layout.addWidget(quick_hint)
         self.quick_controls_layout = QVBoxLayout()
-        self.quick_controls_layout.setSpacing(8)
+        self.quick_controls_layout.setSpacing(10)
         quick_layout.addLayout(self.quick_controls_layout)
         self.quick_controls_group.hide()
         self._quick_controls_component: Component | None = None
         self._quick_parameter_controls = {}
         self.selection_layout.addWidget(self.quick_controls_group)
-        selection_buttons = QHBoxLayout()
+
+        primary_buttons = QHBoxLayout()
+        primary_buttons.setSpacing(6)
         self.edit_button = QPushButton("Modifier")
+        self.edit_button.setObjectName("primaryButton")
         self.edit_button.clicked.connect(self.edit_selected)
         self.rotate_button = QPushButton("Tourner")
         self.rotate_button.clicked.connect(self.rotate_selected)
+        primary_buttons.addWidget(self.edit_button, 1)
+        primary_buttons.addWidget(self.rotate_button, 1)
+        self.selection_layout.addLayout(primary_buttons)
         self.delete_button = QPushButton("Supprimer")
+        self.delete_button.setObjectName("dangerButton")
         self.delete_button.clicked.connect(self.delete_selected)
-        for button in (self.edit_button, self.rotate_button, self.delete_button):
-            selection_buttons.addWidget(button)
-        self.selection_layout.addLayout(selection_buttons)
+        self.selection_layout.addWidget(self.delete_button)
         self.repair_button = QPushButton("Réparer le composant")
+        self.repair_button.setObjectName("primaryButton")
         self.repair_button.clicked.connect(self.repair_selected_component)
         self.repair_button.hide()
         self.selection_layout.addWidget(self.repair_button)
         self.switch_button = QPushButton()
+        self.switch_button.setObjectName("primaryButton")
         self.switch_button.clicked.connect(self.toggle_selected_switch)
         self.switch_button.hide()
         self.selection_layout.addWidget(self.switch_button)
         right_layout.addWidget(self.selection_group)
 
-        self.results_group = QGroupBox("Résultats MNA")
+        self.results_group = QGroupBox("Résultats")
         results_layout = QVBoxLayout(self.results_group)
+        results_layout.setSpacing(8)
+        self.results_summary = QLabel("En attente de calcul.")
+        self.results_summary.setObjectName("resultsSummary")
+        self.results_summary.setWordWrap(True)
+        results_layout.addWidget(self.results_summary)
         self.results_text = QLabel("En attente de calcul.")
+        self.results_text.setObjectName("resultsBody")
         self.results_text.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
@@ -1053,6 +1090,7 @@ class MainWindow(QMainWindow):
         row.addLayout(controls)
 
         container = QWidget()
+        container.setObjectName("quickRow")
         container.setLayout(row)
         self.quick_controls_layout.addWidget(container)
         self._quick_parameter_controls[name] = (
