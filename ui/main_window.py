@@ -1305,6 +1305,7 @@ class MainWindow(QMainWindow):
                 f"{html.escape(result.message)}</span>"
                 if result.message else ""
             )
+            formula = html.escape(self._calculation_formula(component, result))
             rows.append(
                 "<tr>"
                 f"<td><b>{html.escape(component.label)}</b></td>"
@@ -1313,15 +1314,13 @@ class MainWindow(QMainWindow):
                 f"<td align='right'>{result.p:.5g}</td>"
                 "</tr>"
                 "<tr>"
-                f"<td colspan='4' bgcolor='{colors['inset']}'"
-                f" style='color:{muted}; font-size:9pt'>"
-                f"<i>{html.escape(self._calculation_formula(component, result))}</i>"
-                f"{state}</td>"
+                f"<td colspan='4' style='color:{muted}; font-size:9pt'>"
+                f"{formula}{state}</td>"
                 "</tr>"
             )
         if rows:
             body = (
-                "<table cellpadding='4' cellspacing='0' width='100%'>"
+                "<table cellpadding='3' cellspacing='0' width='100%'>"
                 f"{header}{''.join(rows)}</table>"
             )
         else:
