@@ -1,0 +1,383 @@
+name: Auto update
+
+on:
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: auto-update-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  implement:
+    if: >-
+      (github.event_name == 'issues' && github.event.label.name == 'auto-update')
+      || (github.event_name == 'issue_comment'
+          && github.event.issue.pull_request != null
+          && contains(github.event.comment.body, '/update')
+          && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    outputs:
+      branch: ${{ steps.prepare.outputs.branch }}
+      issue: ${{ steps.prepare.outputs.issue }}
+      version: ${{ steps.prepare.outputs.version }}
+      has_changes: ${{ steps.commit.outputs.has_changes }}
+      pr_number: ${{ steps.pr.outputs.number }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libegl1 libgl1 libxkbcommon0 libdbus-1-3
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Prepare context
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          echo "valid=false" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT_NAME" = "issues" ]; then
+            issue="$ISSUE_NUMBER"
+            update="false"
+            title="$(gh issue view "$issue" --json title -q .title)"
+            gh issue view "$issue" --json body -q .body > "$RUNNER_TEMP/issue_body.md"
+            slug="$(printf '%s' "$title" \
+              | tr '[:upper:]' '[:lower:]' \
+              | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' \
+              | cut -c1-40)"
+            [ -n "$slug" ] || slug="task"
+            branch="auto-update/issue-${issue}-${slug}"
+          else
+            update="true"
+            branch="$(gh pr view "$ISSUE_NUMBER" --json headRefName -q .headRefName)"
+            if ! printf '%s' "$branch" | grep -Eq '^auto-update/issue-[0-9]+-'; then
+              echo "::notice::La PR #$ISSUE_NUMBER n'est pas une PR auto-update, ignorée."
+              exit 0
+            fi
+            issue="$(printf '%s' "$branch" | sed -E 's#^auto-update/issue-([0-9]+)-.*#\1#')"
+            title="$(gh issue view "$issue" --json title -q .title)"
+            gh issue view "$issue" --json body -q .body > "$RUNNER_TEMP/issue_body.md"
+          fi
+          version="$(python scripts/release_version.py version)"
+          echo "valid=true" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "issue=$issue" >> "$GITHUB_OUTPUT"
+          echo "update=$update" >> "$GITHUB_OUTPUT"
+          echo "version=${version}-rc${issue}" >> "$GITHUB_OUTPUT"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+
+      - name: Create or check out branch
+        if: steps.prepare.outputs.valid == 'true'
+        env:
+          BRANCH: ${{ steps.prepare.outputs.branch }}
+        run: |
+          set -euo pipefail
+          git config user.name "opencode-auto-update"
+          git config user.email "opencode-auto-update@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git fetch origin "$BRANCH"
+            git checkout -B "$BRANCH" "origin/$BRANCH"
+          else
+            git checkout -b "$BRANCH"
+          fi
+
+      - name: Install opencode
+        if: steps.prepare.outputs.valid == 'true'
+        run: |
+          curl -fsSL https://opencode.ai/install | bash
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+
+      - name: Build prompt
+        id: prompt
+        if: steps.prepare.outputs.valid == 'true'
+        env:
+          ISSUE: ${{ steps.prepare.outputs.issue }}
+          TITLE: ${{ steps.prepare.outputs.title }}
+          UPDATE: ${{ steps.prepare.outputs.update }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          {
+            echo "# Tâche issue #${ISSUE}"
+            echo
+            echo "## Titre"
+            echo "$TITLE"
+            echo
+            echo "## Description"
+            cat "$RUNNER_TEMP/issue_body.md"
+            echo
+            if [ "$UPDATE" = "true" ]; then
+              echo "## Nouvelles consignes (commentaire du mainteneur)"
+              printf '%s\n' "$COMMENT_BODY"
+              echo
+            fi
+            cat "$GITHUB_WORKSPACE/.github/auto-update-prompt.md"
+          } > "$RUNNER_TEMP/prompt.md"
+          echo "path=$RUNNER_TEMP/prompt.md" >> "$GITHUB_OUTPUT"
+
+      - name: Run opencode
+        if: steps.prepare.outputs.valid == 'true'
+        env:
+          OPENCODE_DISABLE_AUTOUPDATE: "true"
+        run: |
+          set -euo pipefail
+          opencode run --model opencode/big-pickle --auto "$(cat "$RUNNER_TEMP/prompt.md")" 2>&1 | tee "$RUNNER_TEMP/opencode.log"
+
+      - name: Commit and push
+        id: commit
+        if: steps.prepare.outputs.valid == 'true'
+        env:
+          BRANCH: ${{ steps.prepare.outputs.branch }}
+          BASE: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit -m "chore(auto-update): apply remaining changes"
+          fi
+          git fetch origin "$BASE"
+          ahead="$(git rev-list --count "origin/$BASE..HEAD")"
+          echo "has_changes=$([ "$ahead" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          if [ "$ahead" -gt 0 ]; then
+            git push --set-upstream origin "$BRANCH"
+          fi
+
+      - name: Open or update pull request
+        id: pr
+        if: steps.prepare.outputs.valid == 'true' && steps.commit.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.prepare.outputs.branch }}
+          BASE: ${{ github.event.repository.default_branch }}
+          ISSUE: ${{ steps.prepare.outputs.issue }}
+          TITLE: ${{ steps.prepare.outputs.title }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Mise à jour automatique — issue #${ISSUE}"
+            echo
+            echo "Clôt l'issue #${ISSUE}."
+            echo
+            echo "### Résumé produit par OpenCode"
+            echo
+            echo '```'
+            tail -n 120 "$RUNNER_TEMP/opencode.log" || true
+            echo '```'
+            echo
+            echo "### Commits"
+            git log --format='- `%h` %s' "origin/$BASE..HEAD" || true
+            echo
+            echo "### Aperçu"
+            echo "Une pré-release **draft** (exe portable Windows + AppImage Linux) est construite automatiquement : voir la section **Releases**."
+            echo
+            echo "Pour demander une correction, commente cette PR avec \`/update\` suivi de tes consignes."
+          } > "$RUNNER_TEMP/pr_body.md"
+          existing="$(gh pr list --head "$BRANCH" --json number -q '.[0].number' || true)"
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --body-file "$RUNNER_TEMP/pr_body.md"
+            echo "number=$existing" >> "$GITHUB_OUTPUT"
+          else
+            url="$(gh pr create --base "$BASE" --head "$BRANCH" \
+              --title "$TITLE" --body-file "$RUNNER_TEMP/pr_body.md")"
+            echo "number=$(basename "$url")" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report no changes
+        if: steps.prepare.outputs.valid == 'true' && steps.commit.outputs.has_changes != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ steps.prepare.outputs.issue }}
+        run: gh issue comment "$ISSUE" --body "Aucun changement produit par OpenCode (aucun commit). Rien à proposer."
+
+  build-windows:
+    needs: implement
+    if: needs.implement.outputs.has_changes == 'true'
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.implement.outputs.branch }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build portable executable
+        shell: pwsh
+        run: |
+          $iconPath = (Resolve-Path "assets\icons").Path
+          python -m PyInstaller --noconfirm --clean --windowed --onefile --name VoltForge-Portable --icon "${iconPath}\voltforge.ico" --distpath "dist\portable" --workpath "build\portable" --specpath "build\portable" --add-data "${iconPath};assets\icons" main.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force -Path "preview" | Out-Null
+          Copy-Item "dist\portable\VoltForge-Portable.exe" "preview\VoltForge-${{ needs.implement.outputs.version }}-windows-x64-portable.exe"
+
+      - name: Upload Windows preview
+        uses: actions/upload-artifact@v5
+        with:
+          name: preview-windows
+          path: preview/*.exe
+          if-no-files-found: error
+
+  build-linux:
+    needs: implement
+    if: needs.implement.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.implement.outputs.branch }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install system packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes librsvg2-bin
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build AppImage
+        env:
+          VERSION: ${{ needs.implement.outputs.version }}
+        run: |
+          set -euo pipefail
+          python -m PyInstaller --noconfirm --clean --windowed --name VoltForge --add-data "assets/icons:assets/icons" main.py
+
+          appdir="$RUNNER_TEMP/VoltForge.AppDir"
+          install -d "$appdir/usr/bin/VoltForge"
+          cp -a dist/VoltForge/. "$appdir/usr/bin/VoltForge/"
+          cat > "$appdir/AppRun" <<'EOF'
+          #!/bin/sh
+          exec "$APPDIR/usr/bin/VoltForge/VoltForge" "$@"
+          EOF
+          chmod 0755 "$appdir/AppRun"
+          cat > "$appdir/voltforge.desktop" <<'EOF'
+          [Desktop Entry]
+          Name=VoltForge
+          GenericName=Conception et simulation électrique
+          Comment=Electrical circuit design and simulation
+          Keywords=électricité;circuit;simulation;électronique;VoltForge;
+          Exec=AppRun
+          Icon=voltforge
+          Terminal=false
+          Type=Application
+          Categories=Education;Science;Engineering;
+          StartupWMClass=VoltForge
+          EOF
+          install -d "$appdir/usr/share/applications"
+          install -d "$appdir/usr/share/icons/hicolor/256x256/apps"
+          cp "$appdir/voltforge.desktop" "$appdir/usr/share/applications/voltforge.desktop"
+          rsvg-convert -w 256 -h 256 assets/icons/voltforge.svg -o "$appdir/voltforge.png"
+          cp "$appdir/voltforge.png" \
+            "$appdir/usr/share/icons/hicolor/256x256/apps/voltforge.png"
+          ln -s voltforge.png "$appdir/.DirIcon"
+
+          curl --fail --location --retry 3 \
+            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage \
+            --output "$RUNNER_TEMP/appimagetool"
+          chmod 0755 "$RUNNER_TEMP/appimagetool"
+          mkdir -p preview
+          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$RUNNER_TEMP/appimagetool" \
+            "$appdir" "preview/VoltForge-${VERSION}-linux-x86_64.AppImage"
+
+      - name: Upload Linux preview
+        uses: actions/upload-artifact@v5
+        with:
+          name: preview-linux
+          path: preview/*.AppImage
+          if-no-files-found: error
+
+  prerelease:
+    needs:
+      - implement
+      - build-windows
+      - build-linux
+    if: needs.implement.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Download preview packages
+        uses: actions/download-artifact@v5
+        with:
+          path: preview
+          merge-multiple: true
+
+      - name: Publish draft pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.implement.outputs.version }}
+          BRANCH: ${{ needs.implement.outputs.branch }}
+          ISSUE: ${{ needs.implement.outputs.issue }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" preview/* --clobber
+          else
+            gh release create "$TAG" preview/* \
+              --target "$BRANCH" \
+              --title "Aperçu auto-update (issue #${ISSUE}) — ${TAG}" \
+              --notes "Pré-release **draft** générée automatiquement par le workflow auto-update pour l'issue #${ISSUE}. Exe portable Windows + AppImage Linux." \
+              --prerelease \
+              --draft
+          fi
+
+      - name: Comment preview link on pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ needs.implement.outputs.pr_number }}
+          TAG: ${{ needs.implement.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh pr comment "$PR" --body "Aperçu reconstruit : pré-release **${TAG}** (exe portable Windows + AppImage Linux) disponible dans la section Releases."
