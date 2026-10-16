@@ -17,6 +17,9 @@ exporter des schémas statiques ou des animations de scénarios.
   masse, instruments de mesure et composants personnalisés.
 - Pack d'icônes SVG cohérent dans `assets/icons/`, utilisé par la barre
   d'outils unique.
+- Logo VoltForge dédié pour l'icône de la fenêtre, les exécutables et
+  l'installateur Windows, ainsi que les lanceurs Linux et leur recherche
+  d'applications.
 - Résolution DC et transitoire (Euler implicite pour C et L), mesures de
   tension/courant/puissance, limites de tension et de puissance, composants
   grillés en cas de surcharge et fusibles déclenchés.
@@ -101,6 +104,8 @@ les enregistrer, de les abandonner ou d'annuler la fermeture.
 ## Compilation
 
 `./compil.sh` (Windows : `compil.bat`) construit un exécutable avec PyInstaller.
+Le logo de l'application est défini dans `assets/icons/voltforge.svg` et sa
+version Windows multi-résolution dans `assets/icons/voltforge.ico`.
 Les releases Windows proposent un installateur classique `.exe` et un `.exe`
 portable autonome qui peut être lancé sans installation.
 

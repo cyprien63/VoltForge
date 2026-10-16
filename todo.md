@@ -97,3 +97,5 @@
   composants et commandes.
 - [ ] Ajouter le courant AC et DC 
 - [ ] Ajouter un osciloscope pour fair les simulation 
+
+- [ ] ajouter un système d'extention que le programe ira telecharger sur le repo git hub sur la branche extention 

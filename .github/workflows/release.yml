@@ -68,7 +68,7 @@ jobs:
       - name: Build Windows installer and portable executable
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --windowed --name VoltForge --add-data "assets\icons;assets\icons" main.py
+          python -m PyInstaller --noconfirm --clean --windowed --name VoltForge --icon "assets\icons\voltforge.ico" --add-data "assets\icons;assets\icons" main.py
           Set-Content -Path "dist\VoltForge\VERSION.txt" -Value "${{ needs.prepare.outputs.version }}"
 
           $version = "${{ needs.prepare.outputs.version }}"
@@ -78,6 +78,7 @@ jobs:
           AppName=VoltForge
           AppVersion=__VERSION__
           AppPublisher=VoltForge contributors
+          SetupIconFile=assets\icons\voltforge.ico
           DefaultDirName={autopf}\VoltForge
           DefaultGroupName=VoltForge
           OutputDir=dist\installer
@@ -105,7 +106,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           $iconPath = (Resolve-Path "assets\icons").Path
-          python -m PyInstaller --noconfirm --clean --windowed --onefile --name VoltForge-Portable --distpath "dist\portable" --workpath "build\portable" --specpath "build\portable" --add-data "${iconPath};assets\icons" main.py
+          python -m PyInstaller --noconfirm --clean --windowed --onefile --name VoltForge-Portable --icon "assets\icons\voltforge.ico" --distpath "dist\portable" --workpath "build\portable" --specpath "build\portable" --add-data "${iconPath};assets\icons" main.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Rename-Item -Path "dist\portable\VoltForge-Portable.exe" -NewName "VoltForge-${version}-windows-x64-portable.exe"
           New-Item -ItemType Directory -Force -Path "release-assets" | Out-Null
@@ -157,7 +158,7 @@ jobs:
           install -d "$package_root/usr/share/applications"
           install -d "$package_root/usr/share/icons/hicolor/scalable/apps"
           cp -a dist/VoltForge/. "$package_root/opt/voltforge/"
-          install -m 0644 assets/icons/generator-voltage.svg \
+          install -m 0644 assets/icons/voltforge.svg \
             "$package_root/usr/share/icons/hicolor/scalable/apps/voltforge.svg"
           cat > "$package_root/DEBIAN/control" <<EOF
           Package: voltforge
@@ -172,12 +173,15 @@ jobs:
           cat > "$package_root/usr/share/applications/voltforge.desktop" <<'EOF'
           [Desktop Entry]
           Name=VoltForge
+          GenericName=Conception et simulation électrique
           Comment=Electrical circuit design and simulation
+          Keywords=électricité;circuit;simulation;électronique;VoltForge;
           Exec=/opt/voltforge/VoltForge
           Icon=voltforge
           Terminal=false
           Type=Application
           Categories=Education;Science;Engineering;
+          StartupWMClass=VoltForge
           EOF
           dpkg-deb --build --root-owner-group "$package_root" \
             "VoltForge-${VERSION}-linux-amd64.deb"
@@ -193,17 +197,20 @@ jobs:
           cat > "$appdir/voltforge.desktop" <<'EOF'
           [Desktop Entry]
           Name=VoltForge
+          GenericName=Conception et simulation électrique
           Comment=Electrical circuit design and simulation
+          Keywords=électricité;circuit;simulation;électronique;VoltForge;
           Exec=AppRun
           Icon=voltforge
           Terminal=false
           Type=Application
           Categories=Education;Science;Engineering;
+          StartupWMClass=VoltForge
           EOF
           install -d "$appdir/usr/share/applications"
           install -d "$appdir/usr/share/icons/hicolor/256x256/apps"
           cp "$appdir/voltforge.desktop" "$appdir/usr/share/applications/voltforge.desktop"
-          rsvg-convert -w 256 -h 256 assets/icons/generator-voltage.svg \
+          rsvg-convert -w 256 -h 256 assets/icons/voltforge.svg \
             -o "$appdir/voltforge.png"
           cp "$appdir/voltforge.png" \
             "$appdir/usr/share/icons/hicolor/256x256/apps/voltforge.png"

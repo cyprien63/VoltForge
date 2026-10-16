@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
 from ui.main_window import MainWindow
@@ -14,6 +15,7 @@ def main() -> int:
     app.setApplicationName("VoltForge")
     app.setOrganizationName("VoltForge")
     window = MainWindow()
+    app.setWindowIcon(window.windowIcon())
     window.show()
     return app.exec()
 

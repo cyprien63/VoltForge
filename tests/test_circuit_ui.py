@@ -56,6 +56,7 @@ class CircuitEditorTests(unittest.TestCase):
     def test_component_catalog_has_one_palette_and_valid_icons(self) -> None:
         window = MainWindow()
         self.addCleanup(window.close)
+        self.assertFalse(window.windowIcon().isNull())
         self.assertEqual(window.splitter.count(), 2)
         self.assertEqual(len(window.tool_group.actions()), 3)
         self.assertEqual(len(window.component_categories), 6)

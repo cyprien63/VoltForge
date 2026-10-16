@@ -469,6 +469,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        self.setWindowIcon(QIcon(str(self._icon_path("voltforge.svg"))))
         self.setWindowTitle("VoltForge — Conception et simulation électrique")
         self.resize(1280, 800)
         self.circuit = Circuit()
