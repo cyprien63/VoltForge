@@ -357,6 +357,7 @@ jobs:
       - name: Publish draft pre-release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.implement.outputs.version }}
           BRANCH: ${{ needs.implement.outputs.branch }}
           ISSUE: ${{ needs.implement.outputs.issue }}
@@ -376,6 +377,7 @@ jobs:
       - name: Comment preview link on pull request
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           PR: ${{ needs.implement.outputs.pr_number }}
           TAG: ${{ needs.implement.outputs.version }}
         run: |
