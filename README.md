@@ -108,8 +108,9 @@ portable autonome qui peut être lancé sans installation.
 
 Chaque push sur `main` déclenche une compilation Windows et Linux, puis publie
 une release GitHub avec l'installateur Windows (`-setup.exe`), l'exécutable
-Windows portable (`-portable.exe`), l'archive Linux portable (`.tar.gz`) et le
-paquet Debian (`.deb`). La première release est `v1.0.0` ;
+Windows portable (`-portable.exe`), l'archive Linux portable (`.tar.gz`), le
+paquet Debian (`.deb`) et un AppImage Linux autonome (`.AppImage`). La première
+release est `v1.0.0` ;
 chaque push suivant incrémente le numéro de correctif (`v1.0.1`, `v1.0.2`, etc.).
 Les notes de version listent les commits, leurs auteurs et les fichiers modifiés.
 Le workflow nécessite que les Actions aient le droit d'écrire dans les releases

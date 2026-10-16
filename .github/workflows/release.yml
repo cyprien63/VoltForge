@@ -136,7 +136,7 @@ jobs:
       - name: Install system packaging tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes dpkg-dev
+          sudo apt-get install --yes dpkg-dev librsvg2-bin
 
       - name: Install dependencies
         run: |
@@ -182,6 +182,40 @@ jobs:
           dpkg-deb --build --root-owner-group "$package_root" \
             "VoltForge-${VERSION}-linux-amd64.deb"
 
+          appdir="$RUNNER_TEMP/VoltForge.AppDir"
+          install -d "$appdir/usr/bin/VoltForge"
+          cp -a dist/VoltForge/. "$appdir/usr/bin/VoltForge/"
+          cat > "$appdir/AppRun" <<'EOF'
+          #!/bin/sh
+          exec "$APPDIR/usr/bin/VoltForge/VoltForge" "$@"
+          EOF
+          chmod 0755 "$appdir/AppRun"
+          cat > "$appdir/voltforge.desktop" <<'EOF'
+          [Desktop Entry]
+          Name=VoltForge
+          Comment=Electrical circuit design and simulation
+          Exec=AppRun
+          Icon=voltforge
+          Terminal=false
+          Type=Application
+          Categories=Education;Science;Engineering;
+          EOF
+          install -d "$appdir/usr/share/applications"
+          install -d "$appdir/usr/share/icons/hicolor/256x256/apps"
+          cp "$appdir/voltforge.desktop" "$appdir/usr/share/applications/voltforge.desktop"
+          rsvg-convert -w 256 -h 256 assets/icons/generator-voltage.svg \
+            -o "$appdir/voltforge.png"
+          cp "$appdir/voltforge.png" \
+            "$appdir/usr/share/icons/hicolor/256x256/apps/voltforge.png"
+          ln -s voltforge.png "$appdir/.DirIcon"
+
+          curl --fail --location --retry 3 \
+            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage \
+            --output "$RUNNER_TEMP/appimagetool"
+          chmod 0755 "$RUNNER_TEMP/appimagetool"
+          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$RUNNER_TEMP/appimagetool" \
+            "$appdir" "VoltForge-${VERSION}-linux-x86_64.AppImage"
+
       - name: Upload Linux packages
         uses: actions/upload-artifact@v4
         with:
@@ -189,6 +223,7 @@ jobs:
           path: |
             VoltForge-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz
             VoltForge-${{ needs.prepare.outputs.version }}-linux-amd64.deb
+            VoltForge-${{ needs.prepare.outputs.version }}-linux-x86_64.AppImage
           if-no-files-found: error
 
   publish:
