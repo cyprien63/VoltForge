@@ -19,12 +19,12 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - name: Check out full history and tags
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -37,7 +37,7 @@ jobs:
           python scripts/release_version.py notes > release-notes.md
 
       - name: Save release notes
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: release-notes
           path: release-notes.md
@@ -48,10 +48,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -106,7 +106,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           $iconPath = (Resolve-Path "assets\icons").Path
-          python -m PyInstaller --noconfirm --clean --windowed --onefile --name VoltForge-Portable --icon "assets\icons\voltforge.ico" --distpath "dist\portable" --workpath "build\portable" --specpath "build\portable" --add-data "${iconPath};assets\icons" main.py
+          python -m PyInstaller --noconfirm --clean --windowed --onefile --name VoltForge-Portable --icon "${iconPath}\voltforge.ico" --distpath "dist\portable" --workpath "build\portable" --specpath "build\portable" --add-data "${iconPath};assets\icons" main.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Rename-Item -Path "dist\portable\VoltForge-Portable.exe" -NewName "VoltForge-${version}-windows-x64-portable.exe"
           New-Item -ItemType Directory -Force -Path "release-assets" | Out-Null
@@ -114,7 +114,7 @@ jobs:
           Copy-Item "dist\portable\VoltForge-${version}-windows-x64-portable.exe" "release-assets\"
 
       - name: Upload Windows executables
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: windows-package
           path: release-assets/*.exe
@@ -125,10 +125,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -224,7 +224,7 @@ jobs:
             "$appdir" "VoltForge-${VERSION}-linux-x86_64.AppImage"
 
       - name: Upload Linux packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: linux-packages
           path: |
@@ -241,24 +241,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source and release metadata
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Download release packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: windows-package
           path: release-assets
 
       - name: Download Linux packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: linux-packages
           path: release-assets
 
       - name: Download release notes
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: release-notes
           path: release-metadata
