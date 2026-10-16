@@ -441,6 +441,30 @@ class MainWindow(QMainWindow):
         "r_sh": "Résistance du shunt",
         "i_test": "Courant de test",
     }
+    THEMES = {
+        "light": {
+            "background": "#f3f6fb",
+            "panel": "#ffffff",
+            "field": "#ffffff",
+            "text": "#1f2937",
+            "muted": "#64748b",
+            "border": "#dbe3ed",
+            "accent": "#0f9f86",
+            "hover": "#e9f7f4",
+            "selected": "#d8f3ed",
+        },
+        "dark": {
+            "background": "#111a24",
+            "panel": "#192532",
+            "field": "#111a24",
+            "text": "#e5edf5",
+            "muted": "#91a2b3",
+            "border": "#304252",
+            "accent": "#45d2b4",
+            "hover": "#253a46",
+            "selected": "#23483f",
+        },
+    }
     ICONS = {
         Kind.GENERATOR: "generator-voltage.svg",
         Kind.BATTERY: "battery.svg",
@@ -477,7 +501,9 @@ class MainWindow(QMainWindow):
         self.project_path: Path | None = None
         self.scenario_text = ""
         self.is_dirty = False
-        self.theme = QSettings("VoltForge", "VoltForge").value("theme", "dark")
+        stored_theme = QSettings("VoltForge", "VoltForge").value("theme", "dark")
+        self.theme = "light" if stored_theme == "light" else "dark"
+        self.colors = self.THEMES[self.theme]
         self._play_timer = QTimer(self)
         self._play_timer.setInterval(20)
         self._play_timer.timeout.connect(self._advance_playback)
@@ -725,16 +751,19 @@ class MainWindow(QMainWindow):
 
     def set_theme(self, theme: str) -> None:
         self.theme = theme if theme == "light" else "dark"
+        colors = self.THEMES[self.theme]
+        self.colors = colors
         if hasattr(self, "canvas"):
             self.canvas.set_theme(self.theme)
-        if self.theme == "light":
-            background, panel, field = "#f3f6fb", "#ffffff", "#ffffff"
-            text, muted, border = "#1f2937", "#64748b", "#dbe3ed"
-            accent, hover, selected = "#0f9f86", "#e9f7f4", "#d8f3ed"
-        else:
-            background, panel, field = "#111a24", "#192532", "#111a24"
-            text, muted, border = "#e5edf5", "#91a2b3", "#304252"
-            accent, hover, selected = "#45d2b4", "#253a46", "#23483f"
+        background = colors["background"]
+        panel = colors["panel"]
+        field = colors["field"]
+        text = colors["text"]
+        muted = colors["muted"]
+        border = colors["border"]
+        accent = colors["accent"]
+        hover = colors["hover"]
+        selected = colors["selected"]
         self.setStyleSheet(f"""
             QMainWindow, QWidget {{
                 background: {background};
