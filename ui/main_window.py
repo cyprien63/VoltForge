@@ -1359,7 +1359,7 @@ class MainWindow(QMainWindow):
             for name, value in rows
         )
         return (
-            "<table cellpadding='2' cellspacing='0' width='100%'>"
+            "<table cellpadding='1' cellspacing='0' width='100%'>"
             f"{cells}</table>"
         )
 
