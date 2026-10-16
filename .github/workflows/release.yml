@@ -62,18 +62,59 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pyinstaller
 
-      - name: Build Windows application
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+
+      - name: Build Windows installer and portable executable
         shell: pwsh
         run: |
           python -m PyInstaller --noconfirm --clean --windowed --name VoltForge --add-data "assets\icons;assets\icons" main.py
           Set-Content -Path "dist\VoltForge\VERSION.txt" -Value "${{ needs.prepare.outputs.version }}"
-          Compress-Archive -Path "dist\VoltForge" -DestinationPath "VoltForge-${{ needs.prepare.outputs.version }}-windows-x64.zip"
 
-      - name: Upload Windows package
+          $version = "${{ needs.prepare.outputs.version }}"
+          $installerScript = @'
+          [Setup]
+          AppId={{87F6C4D1-5E52-4E63-B758-7DEB2C205D2A}
+          AppName=VoltForge
+          AppVersion=__VERSION__
+          AppPublisher=VoltForge contributors
+          DefaultDirName={autopf}\VoltForge
+          DefaultGroupName=VoltForge
+          OutputDir=dist\installer
+          OutputBaseFilename=VoltForge-__VERSION__-windows-x64-setup
+          ArchitecturesInstallIn64BitMode=x64
+          Compression=lzma2
+          SolidCompression=yes
+          WizardStyle=modern
+          UninstallDisplayIcon={app}\VoltForge.exe
+
+          [Files]
+          Source: "dist\VoltForge\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+          [Icons]
+          Name: "{group}\VoltForge"; Filename: "{app}\VoltForge.exe"
+          Name: "{autodesktop}\VoltForge"; Filename: "{app}\VoltForge.exe"; Tasks: desktopicon
+
+          [Tasks]
+          Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
+          '@
+          $installerScript = $installerScript.Replace("__VERSION__", $version)
+          Set-Content -Path "installer.iss" -Value $installerScript -Encoding ASCII
+          New-Item -ItemType Directory -Force -Path "dist\installer" | Out-Null
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "installer.iss"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          python -m PyInstaller --noconfirm --clean --windowed --onefile --name VoltForge-Portable --distpath "dist\portable" --workpath "build\portable" --specpath "build\portable" --add-data "assets\icons;assets\icons" main.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Rename-Item -Path "dist\portable\VoltForge-Portable.exe" -NewName "VoltForge-${version}-windows-x64-portable.exe"
+
+      - name: Upload Windows executables
         uses: actions/upload-artifact@v4
         with:
           name: windows-package
-          path: VoltForge-${{ needs.prepare.outputs.version }}-windows-x64.zip
+          path: |
+            dist/installer/VoltForge-${{ needs.prepare.outputs.version }}-windows-x64-setup.exe
+            dist/portable/VoltForge-${{ needs.prepare.outputs.version }}-windows-x64-portable.exe
           if-no-files-found: error
 
   build-linux:
