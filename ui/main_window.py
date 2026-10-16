@@ -675,6 +675,7 @@ class MainWindow(QMainWindow):
         self.rotate_button = QPushButton("Tourner")
         self.rotate_button.clicked.connect(self.rotate_selected)
         self.delete_button = QPushButton("Supprimer")
+        self.delete_button.setObjectName("dangerButton")
         self.delete_button.clicked.connect(self.delete_selected)
         for button in (self.edit_button, self.rotate_button, self.delete_button):
             selection_buttons.addWidget(button)
@@ -770,10 +771,12 @@ class MainWindow(QMainWindow):
             background, panel, field = "#f3f6fb", "#ffffff", "#ffffff"
             text, muted, border = "#1f2937", "#64748b", "#dbe3ed"
             accent, hover, selected = "#0f9f86", "#e9f7f4", "#d8f3ed"
+            danger, danger_hover = "#c0392b", "#fbe9e7"
         else:
             background, panel, field = "#111a24", "#192532", "#111a24"
             text, muted, border = "#e5edf5", "#91a2b3", "#304252"
             accent, hover, selected = "#45d2b4", "#253a46", "#23483f"
+            danger, danger_hover = "#ff8b93", "#4a2530"
         self.setStyleSheet(f"""
             QMainWindow, QWidget {{
                 background: {background};
@@ -794,23 +797,29 @@ class MainWindow(QMainWindow):
             QToolBar::separator {{ background: {border}; width: 1px; margin: 4px; }}
             QToolButton {{
                 background: transparent; border: 1px solid transparent;
-                border-radius: 7px; padding: 6px 9px;
+                border-radius: 6px; padding: 6px 9px;
             }}
             QToolButton:hover, QPushButton:hover {{ background: {hover}; }}
             QToolButton:checked {{ background: {selected}; color: {accent}; }}
             QPushButton {{
                 background: {panel}; border: 1px solid {border};
-                border-radius: 7px; padding: 7px 10px;
+                border-radius: 6px; padding: 7px 10px;
             }}
             QPushButton:pressed {{ background: {selected}; }}
             QPushButton:disabled {{ color: {muted}; }}
+            QPushButton#dangerButton:hover {{
+                background: {danger_hover}; color: {danger};
+                border: 1px solid {danger};
+            }}
             QGroupBox {{
-                background: {panel}; border: 1px solid {border}; border-radius: 10px;
-                margin-top: 12px; padding: 9px;
+                background: {panel}; border: 1px solid {border}; border-radius: 8px;
+                margin-top: 14px; padding: 10px 9px 9px 9px;
             }}
             QGroupBox::title {{
-                subcontrol-origin: margin; left: 12px; padding: 0 5px;
-                font-weight: 600;
+                subcontrol-origin: margin; subcontrol-position: top left;
+                left: 12px; padding: 0 6px; color: {muted};
+                font-weight: 600; text-transform: uppercase;
+                letter-spacing: 1px; font-size: 8.5pt;
             }}
             QLineEdit, QDoubleSpinBox, QSpinBox, QComboBox, QTableWidget,
             QPlainTextEdit {{
@@ -820,6 +829,18 @@ class MainWindow(QMainWindow):
             }}
             QLineEdit:focus, QDoubleSpinBox:focus, QComboBox:focus,
             QPlainTextEdit:focus {{ border: 1px solid {accent}; }}
+            QTableWidget#resultsTable {{
+                background: transparent; border: none; border-radius: 0;
+                padding: 0; alternate-background-color: {hover};
+                gridline-color: {border};
+            }}
+            QTableWidget#resultsTable::item {{ padding: 3px 6px; }}
+            QHeaderView::section {{
+                background: transparent; color: {muted};
+                border: none; border-bottom: 1px solid {border};
+                padding: 4px 6px; font-weight: 600; font-size: 8.5pt;
+            }}
+            QTableCornerButton::section {{ background: transparent; border: none; }}
             QScrollArea {{ background: transparent; border: none; }}
             QScrollBar:vertical {{
                 background: transparent; width: 10px; margin: 3px;
@@ -835,6 +856,11 @@ class MainWindow(QMainWindow):
                 background: {panel}; color: {muted};
                 border-top: 1px solid {border};
             }}
+            QLabel#selectionTitle {{
+                font-size: 12pt; font-weight: 600; padding-bottom: 2px;
+            }}
+            QLabel#selectionDetail {{ color: {text}; }}
+            QLabel#resultsDetail {{ color: {muted}; font-size: 9pt; }}
             QLabel#mutedText {{ color: {muted}; font-size: 9pt; }}
             QLabel#quickParameterLabel {{ font-weight: 600; }}
             QLabel#quickParameterValue {{ color: {accent}; font-weight: 600; }}
