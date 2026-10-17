@@ -1077,6 +1077,23 @@ class UndoRedoTests(unittest.TestCase):
         actions["Rétablir"].trigger()
         self.assertEqual([c.label for c in window.circuit.components], ["R_BTN"])
 
+    def test_toolbar_undo_redo_buttons_are_small_icons_without_text(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        toolbar = window.findChild(QToolBar, "mainToolbar")
+        buttons = [
+            toolbar.widgetForAction(window.undo_action),
+            toolbar.widgetForAction(window.redo_action),
+        ]
+        for button in buttons:
+            self.assertIsNotNone(button)
+            self.assertEqual(button.toolButtonStyle(),
+                             Qt.ToolButtonStyle.ToolButtonIconOnly)
+            self.assertFalse(button.icon().isNull())
+            self.assertLess(button.iconSize().width(), toolbar.iconSize().width())
+        self.assertTrue(window.undo_action.text())
+        self.assertTrue(window.redo_action.text())
+
     def test_voltage_arrow_creation_and_deletion_are_undoable(self) -> None:
         window = MainWindow()
         self.addCleanup(window.close)
