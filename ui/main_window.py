@@ -13,6 +13,7 @@ from PyQt6.QtCore import QByteArray, QPointF, QSize, Qt, QTimer, QSettings
 from PyQt6.QtGui import QAction, QActionGroup, QIcon, QKeySequence, QPainter, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -22,6 +23,7 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -567,6 +569,7 @@ class MainWindow(QMainWindow):
         toolbar.setMovable(False)
         toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         toolbar.setIconSize(QSize(24, 24))
+        toolbar.setObjectName("mainToolbar")
         self.tool_group = QActionGroup(self)
         self.tool_group.setExclusive(True)
         self.mode_actions = {}
@@ -593,6 +596,7 @@ class MainWindow(QMainWindow):
         components_toolbar.setMovable(False)
         components_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         components_toolbar.setIconSize(QSize(22, 22))
+        components_toolbar.setObjectName("componentsToolbar")
         self.component_categories = {}
         labels = dict((kind, label) for kind, label in self.TOOL_COMPONENTS)
         for category, icon, kinds in self.COMPONENT_CATEGORIES:
@@ -642,15 +646,27 @@ class MainWindow(QMainWindow):
         right = QWidget()
         right.setMinimumWidth(280)
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(4, 4, 4, 4)
-        self.selection_group = QGroupBox("Propriétés")
+        right_layout.setContentsMargins(6, 6, 6, 6)
+        right_layout.setSpacing(6)
+        self.selection_group = QGroupBox("Sélection")
         self.selection_layout = QVBoxLayout(self.selection_group)
+        self.selection_layout.setSpacing(8)
+        self.selection_title = QLabel("Aucun élément sélectionné")
+        self.selection_title.setObjectName("selectionTitle")
+        self.selection_title.setWordWrap(True)
+        self.selection_layout.addWidget(self.selection_title)
         self.selection_label = QLabel("Aucun élément sélectionné")
+        self.selection_label.setObjectName("selectionDetail")
         self.selection_label.setWordWrap(True)
+        self.selection_label.setStyleSheet("background: transparent; padding: 4px; border: 1px solid transparent;")
         self.selection_layout.addWidget(self.selection_label)
-        self.quick_controls_group = QGroupBox("Réglage en direct")
+        self.quick_controls_group = QWidget()
         quick_layout = QVBoxLayout(self.quick_controls_group)
-        quick_layout.setContentsMargins(10, 12, 10, 8)
+        quick_layout.setContentsMargins(0, 4, 0, 0)
+        quick_layout.setSpacing(6)
+        quick_heading = QLabel("Réglage en direct")
+        quick_heading.setObjectName("sectionHeading")
+        quick_layout.addWidget(quick_heading)
         quick_hint = QLabel("Les résultats se recalculent pendant le réglage.")
         quick_hint.setObjectName("mutedText")
         quick_hint.setWordWrap(True)
@@ -668,6 +684,7 @@ class MainWindow(QMainWindow):
         self.rotate_button = QPushButton("Tourner")
         self.rotate_button.clicked.connect(self.rotate_selected)
         self.delete_button = QPushButton("Supprimer")
+        self.delete_button.setObjectName("dangerButton")
         self.delete_button.clicked.connect(self.delete_selected)
         for button in (self.edit_button, self.rotate_button, self.delete_button):
             selection_buttons.addWidget(button)
@@ -682,9 +699,44 @@ class MainWindow(QMainWindow):
         self.selection_layout.addWidget(self.switch_button)
         right_layout.addWidget(self.selection_group)
 
-        self.results_group = QGroupBox("Résultats MNA")
+        self.results_group = QGroupBox("Résultats")
         results_layout = QVBoxLayout(self.results_group)
+        results_layout.setSpacing(8)
+
+        self.results_table = QTableWidget(0, 4)
+        self.results_table.setObjectName("resultsTable")
+        self.results_table.setHorizontalHeaderLabels(
+            ["Composant", "U (V)", "I (A)", "P (W)"]
+        )
+        self.results_table.verticalHeader().setVisible(False)
+        self.results_table.horizontalHeader().setStretchLastSection(False)
+        self.results_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
+        for column in range(1, 4):
+            self.results_table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeMode.ResizeToContents
+            )
+        self.results_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self.results_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.NoSelection
+        )
+        self.results_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.results_table.setShowGrid(False)
+        self.results_table.setAlternatingRowColors(False)
+        self.results_table.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.results_table.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.results_table.setMinimumHeight(120)
+        results_layout.addWidget(self.results_table)
+
         self.results_text = QLabel("En attente de calcul.")
+        self.results_text.setObjectName("resultsDetail")
         self.results_text.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
@@ -702,6 +754,7 @@ class MainWindow(QMainWindow):
         splitter.setSizes([900, 320])
         simulation_toolbar = self.addToolBar("Simulation")
         simulation_toolbar.setMovable(False)
+        simulation_toolbar.setObjectName("simToolbar")
         self._toolbar_action(
             simulation_toolbar, "Simulation…", self.open_scenario_dialog
         )
@@ -731,10 +784,12 @@ class MainWindow(QMainWindow):
             background, panel, field = "#f3f6fb", "#ffffff", "#ffffff"
             text, muted, border = "#1f2937", "#64748b", "#dbe3ed"
             accent, hover, selected = "#0f9f86", "#e9f7f4", "#d8f3ed"
+            danger, danger_hover = "#c0392b", "#fbe9e7"
         else:
             background, panel, field = "#111a24", "#192532", "#111a24"
             text, muted, border = "#e5edf5", "#91a2b3", "#304252"
             accent, hover, selected = "#45d2b4", "#253a46", "#23483f"
+            danger, danger_hover = "#ff8b93", "#4a2530"
         self.setStyleSheet(f"""
             QMainWindow, QWidget {{
                 background: {background};
@@ -746,32 +801,37 @@ class MainWindow(QMainWindow):
                 color: {text};
                 border: none;
             }}
-            QMenuBar {{ padding: 4px 8px; }}
+            QMenuBar {{ padding: 4px 8px; border-bottom: 1px solid {border}; }}
             QMenuBar::item {{ padding: 6px 10px; border-radius: 5px; }}
             QMenuBar::item:selected, QMenu::item:selected {{ background: {hover}; }}
             QMenu {{ border: 1px solid {border}; padding: 5px; }}
             QMenu::item {{ padding: 6px 24px 6px 10px; border-radius: 4px; }}
-            QToolBar {{ spacing: 6px; padding: 6px 8px; }}
+            QToolBar {{ spacing: 6px; padding: 6px 8px; border-bottom: 1px solid {border}; }}
             QToolBar::separator {{ background: {border}; width: 1px; margin: 4px; }}
             QToolButton {{
                 background: transparent; border: 1px solid transparent;
-                border-radius: 7px; padding: 6px 9px;
+                border-radius: 4px; padding: 6px 8px;
             }}
             QToolButton:hover, QPushButton:hover {{ background: {hover}; }}
-            QToolButton:checked {{ background: {selected}; color: {accent}; }}
+            QToolButton:checked {{ background: {selected}; color: {accent}; border: 1px solid {accent}; }}
             QPushButton {{
                 background: {panel}; border: 1px solid {border};
-                border-radius: 7px; padding: 7px 10px;
+                border-radius: 4px; padding: 7px 10px;
             }}
             QPushButton:pressed {{ background: {selected}; }}
             QPushButton:disabled {{ color: {muted}; }}
+            QPushButton#dangerButton:hover {{
+                background: {danger_hover}; color: {danger};
+                border: 1px solid {danger};
+            }}
             QGroupBox {{
-                background: {panel}; border: 1px solid {border}; border-radius: 10px;
-                margin-top: 12px; padding: 9px;
+                background: {panel}; border: 1px solid {border}; border-radius: 6px;
+                margin-top: 10px; padding: 9px;
             }}
             QGroupBox::title {{
-                subcontrol-origin: margin; left: 12px; padding: 0 5px;
-                font-weight: 600;
+                subcontrol-origin: margin; subcontrol-position: top left;
+                left: 10px; padding: 0 6px; background: {panel};
+                color: {text}; font-weight: 600; font-size: 10pt;
             }}
             QLineEdit, QDoubleSpinBox, QSpinBox, QComboBox, QTableWidget,
             QPlainTextEdit {{
@@ -781,6 +841,18 @@ class MainWindow(QMainWindow):
             }}
             QLineEdit:focus, QDoubleSpinBox:focus, QComboBox:focus,
             QPlainTextEdit:focus {{ border: 1px solid {accent}; }}
+            QTableWidget#resultsTable {{
+                background: transparent; border: none; border-radius: 0;
+                padding: 0; alternate-background-color: {hover};
+                gridline-color: {border};
+            }}
+            QTableWidget#resultsTable::item {{ padding: 3px 6px; }}
+            QHeaderView::section {{
+                background: transparent; color: {muted};
+                border: none; border-bottom: 1px solid {border};
+                padding: 4px 6px; font-weight: 600; font-size: 9pt;
+            }}
+            QTableCornerButton::section {{ background: transparent; border: none; }}
             QScrollArea {{ background: transparent; border: none; }}
             QScrollBar:vertical {{
                 background: transparent; width: 10px; margin: 3px;
@@ -796,6 +868,15 @@ class MainWindow(QMainWindow):
                 background: {panel}; color: {muted};
                 border-top: 1px solid {border};
             }}
+            QLabel#selectionTitle {{
+                font-size: 12pt; font-weight: 600; padding-bottom: 2px;
+            }}
+            QLabel#selectionDetail {{ color: {text}; background: transparent; padding: 6px; border: 1px solid {border}; }}
+            QLabel#sectionHeading {{
+                color: {text}; font-weight: 600; font-size: 10pt;
+                padding: 2px 0;
+            }}
+            QLabel#resultsDetail {{ color: {muted}; font-size: 9pt; }}
             QLabel#mutedText {{ color: {muted}; font-size: 9pt; }}
             QLabel#quickParameterLabel {{ font-weight: 600; }}
             QLabel#quickParameterValue {{ color: {accent}; font-weight: 600; }}
@@ -885,6 +966,7 @@ class MainWindow(QMainWindow):
         selected_count = len(self.canvas.selected_items)
         if selected_count > 1:
             self._refresh_quick_controls(None)
+            self.selection_title.setText("Sélection multiple")
             self.selection_label.setText(
                 f"{selected_count} éléments sélectionnés\n"
                 "Faites glisser pour les déplacer ensemble ; Supprimer pour tout effacer."
@@ -897,10 +979,12 @@ class MainWindow(QMainWindow):
             return
         if item is None:
             self._refresh_quick_controls(None)
+            self.selection_title.setText("Aucune sélection")
             self.selection_label.setText(
                 f"{len(self.circuit.components)} composant(s), "
                 f"{len(self.circuit.wires)} fil(s), {len(self.circuit.nodes)} nœud(s), "
-                f"{self.circuit.mesh_count()} maille(s)"
+                f"{self.circuit.mesh_count()} maille(s)\n"
+                "Cliquez sur un élément pour afficher ses détails."
             )
             self.edit_button.setEnabled(False)
             self.rotate_button.setEnabled(False)
@@ -911,19 +995,23 @@ class MainWindow(QMainWindow):
         if isinstance(item, Component):
             self._refresh_quick_controls(item)
             result = self.engine.solution.branches.get(item.label)
-            detail = f"{item.short_description()}\n{item.display_value()}"
+            self.selection_title.setText(item.short_description())
+            lines = [item.display_value()]
             if result is not None:
-                detail += f"\nU = {result.u:.5g} V\nI = {result.i:.5g} A"
-                detail += f"\n{self._calculation_formula(item, result)}"
+                lines.append(f"U = {result.u:.5g} V")
+                lines.append(f"I = {result.i:.5g} A")
+                lines.append(self._calculation_formula(item, result))
                 if result.message:
-                    detail += f"\n{result.message}"
+                    lines.append(result.message)
                 if isinstance(item, Motor):
-                    detail += f"\nVitesse = {item.rpm(result.i):.0f} tr/min"
+                    lines.append(f"Vitesse = {item.rpm(result.i):.0f} tr/min")
+            detail = "\n".join(line for line in lines if line)
         elif isinstance(item, VoltageArrow):
             self._refresh_quick_controls(None)
             item.resolve_nodes(self.circuit)
             value = item.voltage(self.engine.solution)
-            detail = f"{item.label}\nFlèche de tension orientée A → B"
+            self.selection_title.setText(item.label)
+            detail = "Flèche de tension orientée A → B"
             if item.node_a in self.circuit.nodes:
                 detail += f"\nNœud de départ : {self.circuit.nodes[item.node_a].name}"
             if item.node_b in self.circuit.nodes:
@@ -932,7 +1020,8 @@ class MainWindow(QMainWindow):
                 detail += f"\nTension : {value:.5g} V"
         else:
             self._refresh_quick_controls(None)
-            detail = f"Fil {getattr(item, 'label', '')}"
+            self.selection_title.setText("Fil")
+            detail = f"{getattr(item, 'label', '')}"
         self.selection_label.setText(detail)
         self.edit_button.setEnabled(isinstance(item, Component))
         self.rotate_button.setEnabled(isinstance(item, Component))
@@ -1113,20 +1202,44 @@ class MainWindow(QMainWindow):
 
     def refresh_results(self) -> None:
         solution = self.engine.solution
-        lines = [
-            f"<b>{'Transitoire' if solution.mode == 'transient' else 'Régime DC'}</b>",
-            f"{len(self.circuit.nodes)} nœud(s) · {self.circuit.mesh_count()} maille(s)",
-            "<i>Calculs : U = Vp − Vn · P = U×I · "
-            "branche résistive : I = U/R</i>",
+        components = [
+            component for component in self.circuit.components
+            if component.label in solution.branches
         ]
-        for component in self.circuit.components:
-            result = solution.branches.get(component.label)
-            if result is None:
-                continue
+        self.results_table.setRowCount(len(components))
+        for row, component in enumerate(components):
+            result = solution.branches[component.label]
+            cells = (
+                component.label,
+                f"{result.u:.5g}",
+                f"{result.i:.5g}",
+                f"{result.p:.5g}",
+            )
+            for column, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                if column:
+                    item.setTextAlignment(
+                        Qt.AlignmentFlag.AlignRight
+                        | Qt.AlignmentFlag.AlignVCenter
+                    )
+                self.results_table.setItem(row, column, item)
+
+        header_height = self.results_table.horizontalHeader().height()
+        row_height = self.results_table.verticalHeader().defaultSectionSize()
+        rows = max(1, len(components))
+        self.results_table.setFixedHeight(header_height + row_height * rows + 4)
+
+        mode = "Transitoire" if solution.mode == "transient" else "Régime DC"
+        lines = [
+            f"<b>{mode}</b> — {len(self.circuit.nodes)} nœud(s) · "
+            f"{self.circuit.mesh_count()} maille(s)",
+            "<i>U = Vp − Vn · P = U×I · branche résistive : I = U/R</i>",
+        ]
+        for component in components:
+            result = solution.branches[component.label]
             state = f" — {result.message}" if result.message else ""
             lines.append(
-                f"<b>{component.label}</b>: {result.u:.5g} V · "
-                f"{result.i:.5g} A · {result.p:.5g} W{state}<br>"
+                f"<b>{component.label}</b>{state}<br>"
                 f"<i>{self._calculation_formula(component, result)}</i>"
             )
         lines.extend(f"<font color='#ff6978'>{error}</font>" for error in solution.errors)
