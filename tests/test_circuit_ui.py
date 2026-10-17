@@ -16,7 +16,7 @@ from PyQt6.QtGui import QIcon, QImage, QKeySequence
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import (
     QApplication, QPlainTextEdit, QPushButton, QMessageBox, QScrollArea,
-    QTableWidget, QToolBar,
+    QTableWidget, QToolBar, QStyle,
 )
 from PIL import Image, ImageChops
 
@@ -1087,12 +1087,28 @@ class UndoRedoTests(unittest.TestCase):
         ]
         for button in buttons:
             self.assertIsNotNone(button)
+            self.assertEqual(button.objectName(), "historyButton")
             self.assertEqual(button.toolButtonStyle(),
                              Qt.ToolButtonStyle.ToolButtonIconOnly)
             self.assertFalse(button.icon().isNull())
             self.assertLess(button.iconSize().width(), toolbar.iconSize().width())
         self.assertTrue(window.undo_action.text())
         self.assertTrue(window.redo_action.text())
+        self.assertIn("QToolButton#historyButton", window.styleSheet())
+
+    def test_toolbar_undo_redo_buttons_are_tightly_grouped(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        window.resize(1100, 700)
+        window.show()
+        self.app.processEvents()
+        toolbar = window.findChild(QToolBar, "mainToolbar")
+        undo_button = toolbar.widgetForAction(window.undo_action)
+        redo_button = toolbar.widgetForAction(window.redo_action)
+        gap = redo_button.x() - (undo_button.x() + undo_button.width())
+        self.assertGreaterEqual(gap, 0)
+        self.assertLessEqual(gap, 20)
+        self.assertLessEqual(undo_button.width(), undo_button.iconSize().width() + 16)
 
     def test_voltage_arrow_creation_and_deletion_are_undoable(self) -> None:
         window = MainWindow()

@@ -523,12 +523,16 @@ class MainWindow(QMainWindow):
         self._add_action(file_menu, "Quitter", self.close, QKeySequence.StandardKey.Quit)
 
         edit_menu = self.menuBar().addMenu("Édition")
-        self.undo_action = QAction(self._icon("undo.svg"), "Annuler", self)
+        self.undo_action = QAction(
+            QIcon(str(self._icon_path("undo.svg"))), "Annuler", self
+        )
         self.undo_action.setProperty("iconName", "undo.svg")
         self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self.undo_action.triggered.connect(self.undo)
         edit_menu.addAction(self.undo_action)
-        self.redo_action = QAction(self._icon("redo.svg"), "Rétablir", self)
+        self.redo_action = QAction(
+            QIcon(str(self._icon_path("redo.svg"))), "Rétablir", self
+        )
         self.redo_action.setProperty("iconName", "redo.svg")
         self.redo_action.setShortcuts([
             QKeySequence("Ctrl+Y"), QKeySequence("Ctrl+Shift+Z"),
@@ -615,6 +619,7 @@ class MainWindow(QMainWindow):
             toolbar.addAction(action)
             button = toolbar.widgetForAction(action)
             if button is not None:
+                button.setObjectName("historyButton")
                 button.setToolButtonStyle(
                     Qt.ToolButtonStyle.ToolButtonIconOnly
                 )
@@ -840,6 +845,7 @@ class MainWindow(QMainWindow):
                 background: transparent; border: 1px solid transparent;
                 border-radius: 4px; padding: 6px 8px;
             }}
+            QToolButton#historyButton {{ padding: 6px 2px; }}
             QToolButton:hover, QPushButton:hover {{ background: {hover}; }}
             QToolButton:checked {{ background: {selected}; color: {accent}; border: 1px solid {accent}; }}
             QPushButton {{
