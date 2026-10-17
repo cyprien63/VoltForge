@@ -16,7 +16,7 @@ from PyQt6.QtGui import QIcon, QImage, QKeySequence
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import (
     QApplication, QPlainTextEdit, QPushButton, QMessageBox, QScrollArea,
-    QTableWidget,
+    QTableWidget, QToolBar,
 )
 from PIL import Image, ImageChops
 
@@ -1058,6 +1058,41 @@ class UndoRedoTests(unittest.TestCase):
         self.assertFalse(window.undo_action.isEnabled())
         self.assertFalse(window.redo_action.isEnabled())
         self.assertEqual(window.circuit.components, [])
+
+    def test_toolbar_exposes_undo_redo_buttons(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        toolbar = window.findChild(QToolBar, "mainToolbar")
+        actions = {action.text(): action for action in toolbar.actions()}
+        self.assertIs(actions["Annuler"], window.undo_action)
+        self.assertIs(actions["Rétablir"], window.redo_action)
+        self.assertTrue(actions["Annuler"].icon().isNull() is False)
+
+        window.circuit.add(Resistor(0, 0, label="R_BTN"))
+        window._circuit_changed()
+        self.assertTrue(actions["Annuler"].isEnabled())
+        actions["Annuler"].trigger()
+        self.assertEqual(window.circuit.components, [])
+        self.assertTrue(actions["Rétablir"].isEnabled())
+        actions["Rétablir"].trigger()
+        self.assertEqual([c.label for c in window.circuit.components], ["R_BTN"])
+
+    def test_voltage_arrow_creation_and_deletion_are_undoable(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        arrow = VoltageArrow((0, 0), (80, 40), circuit=window.circuit)
+        window.circuit.arrows.append(arrow)
+        window.circuit.recompute_nodes()
+        window.canvas.set_selection(arrow)
+        window._circuit_changed()
+        self.assertEqual(len(window.circuit.arrows), 1)
+
+        window.delete_selected()
+        self.assertEqual(window.circuit.arrows, [])
+        window.undo()
+        self.assertEqual(len(window.circuit.arrows), 1)
+        window.redo()
+        self.assertEqual(window.circuit.arrows, [])
 
     def test_quick_parameter_edit_is_undoable(self) -> None:
         window = MainWindow()
