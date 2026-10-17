@@ -150,6 +150,7 @@ class Solver:
         sol = self._solve_once(dt, t)
         nonlinear = [c for c in self.circuit.components if c.is_branch]
         iterations = 0
+        converged = False
         for iterations in range(1, MAX_ITER + 1):
             changed = False
             for comp in nonlinear:
@@ -181,10 +182,34 @@ class Solver:
                     comp.tstate["on"] = 1
                     changed = True
             if not changed:
+                converged = True
                 break
             sol = self._solve_once(dt, t)
+        if not converged:
+            sol.warnings.append(
+                "Modèles non linéaires non convergés : résultats approximatifs "
+                "(vérifiez les seuils des diodes/LED)."
+            )
         sol.iterations = iterations
+        if dt is not None:
+            self._commit_transient_state(sol)
         return sol
+
+    def _commit_transient_state(self, sol: Solution) -> None:
+        """Valide l'état des modèles compagnons, une seule fois par pas.
+
+        Les ré-itérations des modèles non linéaires ne doivent pas faire
+        avancer plusieurs fois la charge du condensateur ou le courant de
+        la bobine au sein d'un même pas de temps.
+        """
+        for comp in self.circuit.components:
+            res = sol.branches.get(comp.label)
+            if res is None:
+                continue
+            if isinstance(comp, Capacitor):
+                comp.tstate["v"] = res.u
+            elif isinstance(comp, Inductor):
+                comp.tstate["i"] = res.i
 
     # -- résolution linéaire ----------------------------------------------
     def _solve_once(self, dt: Optional[float], t: float) -> Solution:
@@ -417,13 +442,6 @@ class Solver:
             else:
                 i = info["g"] * u + info.get("ih", 0.0)
                 p = u * i
-
-            # Mise à jour de l'état transitoire (modèle compagnon)
-            if dt is not None:
-                if isinstance(comp, Capacitor):
-                    comp.tstate["v"] = u
-                elif isinstance(comp, Inductor):
-                    comp.tstate["i"] = i
 
             res = BranchResult(
                 u=u, i=i, p=p,
