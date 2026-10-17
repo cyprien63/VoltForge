@@ -58,3 +58,6 @@ exports/
 *.vfproj.json
 *.scenario.txt
 *.log
+
+# --- Résumé auto-update (lu par la CI, jamais committé) ---
+.github/auto-update-summary.md

@@ -151,6 +151,27 @@ jobs:
           set -euo pipefail
           opencode run --model opencode/big-pickle --auto "$(cat "$RUNNER_TEMP/prompt.md")" 2>&1 | tee "$RUNNER_TEMP/opencode.log"
 
+      - name: Extract summary
+        id: summary
+        if: steps.prepare.outputs.valid == 'true'
+        run: |
+          set -euo pipefail
+          found=false
+          src="$GITHUB_WORKSPACE/.github/auto-update-summary.md"
+          if [ -f "$src" ]; then
+            sed -e 's/\x1b\[[0-9;]*[A-Za-z]//g' "$src" \
+              | tr -d '\000-\010\013\014\016-\037' > "$RUNNER_TEMP/summary.md"
+            rm -f "$src"
+            if [ -s "$RUNNER_TEMP/summary.md" ]; then
+              if [ "$(wc -c < "$RUNNER_TEMP/summary.md")" -gt 30000 ]; then
+                head -n 80 "$RUNNER_TEMP/summary.md" > "$RUNNER_TEMP/summary.tmp"
+                mv "$RUNNER_TEMP/summary.tmp" "$RUNNER_TEMP/summary.md"
+              fi
+              found=true
+            fi
+          fi
+          echo "found=$found" >> "$GITHUB_OUTPUT"
+
       - name: Commit and push
         id: commit
         if: steps.prepare.outputs.valid == 'true'
@@ -159,6 +180,7 @@ jobs:
           BASE: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
+          rm -f .github/auto-update-summary.md
           if [ -n "$(git status --porcelain)" ]; then
             git add -A
             git commit -m "chore(auto-update): apply remaining changes"
@@ -179,28 +201,79 @@ jobs:
           BASE: ${{ github.event.repository.default_branch }}
           ISSUE: ${{ steps.prepare.outputs.issue }}
           TITLE: ${{ steps.prepare.outputs.title }}
+          SUMMARY_FOUND: ${{ steps.summary.outputs.found }}
         run: |
           set -euo pipefail
+          strip_ansi() {
+            sed -e 's/\x1b\[[0-9;]*[A-Za-z]//g' "$1" | tr -d '\000-\010\013\014\016-\037'
+          }
+          log_clean="$RUNNER_TEMP/opencode-clean.log"
+          if [ -f "$RUNNER_TEMP/opencode.log" ]; then
+            strip_ansi "$RUNNER_TEMP/opencode.log" > "$log_clean"
+          else
+            : > "$log_clean"
+          fi
+
+          summary=""
+          if [ "$SUMMARY_FOUND" = "true" ] && [ -s "$RUNNER_TEMP/summary.md" ]; then
+            summary="$(cat "$RUNNER_TEMP/summary.md")"
+          fi
+
+          existing="$(gh pr list --head "$BRANCH" --json number -q '.[0].number' || true)"
+          previous=""
+          if [ -n "$existing" ]; then
+            previous="$(gh pr view "$existing" --json body -q .body 2>/dev/null \
+              | awk '/<!-- opencode-summary:start -->/{f=1;next} /<!-- opencode-summary:end -->/{f=0} f' || true)"
+          fi
+
           {
             echo "## Mise à jour automatique — issue #${ISSUE}"
             echo
             echo "Clôt l'issue #${ISSUE}."
             echo
-            echo "### Résumé produit par OpenCode"
+            echo "### Résumé"
             echo
-            echo '```'
-            tail -n 120 "$RUNNER_TEMP/opencode.log" || true
-            echo '```'
+            echo "<!-- opencode-summary:start -->"
+            if [ -n "$summary" ]; then
+              printf '%s\n' "$summary"
+            else
+              echo "_OpenCode n'a pas écrit de résumé structuré : voir **Journal OpenCode** plus bas et la liste des commits._"
+            fi
+            echo "<!-- opencode-summary:end -->"
+            echo
+            if [ -n "$previous" ] && [ "$previous" != "$summary" ]; then
+              echo "<details><summary>Résumé de l'intervention précédente</summary>"
+              echo
+              printf '%s\n' "$previous"
+              echo
+              echo "</details>"
+              echo
+            fi
+            echo "### Modifications"
+            echo
+            echo '````'
+            git diff --stat "origin/$BASE..HEAD" || true
+            echo '````'
             echo
             echo "### Commits"
+            echo
             git log --format='- `%h` %s' "origin/$BASE..HEAD" || true
+            echo
+            echo "### Journal OpenCode"
+            echo
+            echo "<details><summary>Journal complet (debug)</summary>"
+            echo
+            echo '````'
+            tail -n 80 "$log_clean"
+            echo '````'
+            echo
+            echo "</details>"
             echo
             echo "### Aperçu"
             echo "Une pré-release **draft** (exe portable Windows + AppImage Linux) est construite automatiquement : voir la section **Releases**."
             echo
             echo "Pour demander une correction, commente cette PR avec \`/update\` suivi de tes consignes."
           } > "$RUNNER_TEMP/pr_body.md"
-          existing="$(gh pr list --head "$BRANCH" --json number -q '.[0].number' || true)"
           if [ -n "$existing" ]; then
             gh pr edit "$existing" --body-file "$RUNNER_TEMP/pr_body.md"
             echo "number=$existing" >> "$GITHUB_OUTPUT"
