@@ -611,8 +611,14 @@ class MainWindow(QMainWindow):
             )
 
         toolbar.addSeparator()
-        toolbar.addAction(self.undo_action)
-        toolbar.addAction(self.redo_action)
+        for action in (self.undo_action, self.redo_action):
+            toolbar.addAction(action)
+            button = toolbar.widgetForAction(action)
+            if button is not None:
+                button.setToolButtonStyle(
+                    Qt.ToolButtonStyle.ToolButtonIconOnly
+                )
+                button.setIconSize(QSize(18, 18))
 
         components_toolbar = self.addToolBar("Composants")
         components_toolbar.setMovable(False)
