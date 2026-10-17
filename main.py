@@ -11,6 +11,8 @@ from PyQt6.QtWidgets import QApplication
 from ui.main_window import MainWindow
 from ui.splash import LOGO_SVG, SplashScreen
 
+SPLASH_HOLD_MS = 250
+
 
 def main() -> int:
     app = QApplication(sys.argv)
@@ -19,7 +21,7 @@ def main() -> int:
     app.setWindowIcon(QIcon(str(LOGO_SVG)))
     splash = SplashScreen()
     splash.start()
-    QTimer.singleShot(0, lambda: _open_window(app, splash))
+    QTimer.singleShot(SPLASH_HOLD_MS, lambda: _open_window(app, splash))
     return app.exec()
 
 
