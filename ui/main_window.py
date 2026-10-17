@@ -699,7 +699,7 @@ class MainWindow(QMainWindow):
         self.selection_layout.addWidget(self.switch_button)
         right_layout.addWidget(self.selection_group)
 
-        self.results_group = QGroupBox("Résultats MNA")
+        self.results_group = QGroupBox("Résultats")
         results_layout = QVBoxLayout(self.results_group)
         results_layout.setSpacing(8)
 
