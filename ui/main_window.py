@@ -523,11 +523,13 @@ class MainWindow(QMainWindow):
         self._add_action(file_menu, "Quitter", self.close, QKeySequence.StandardKey.Quit)
 
         edit_menu = self.menuBar().addMenu("Édition")
-        self.undo_action = QAction("Annuler", self)
+        self.undo_action = QAction(self._icon("undo.svg"), "Annuler", self)
+        self.undo_action.setProperty("iconName", "undo.svg")
         self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self.undo_action.triggered.connect(self.undo)
         edit_menu.addAction(self.undo_action)
-        self.redo_action = QAction("Rétablir", self)
+        self.redo_action = QAction(self._icon("redo.svg"), "Rétablir", self)
+        self.redo_action.setProperty("iconName", "redo.svg")
         self.redo_action.setShortcuts([
             QKeySequence("Ctrl+Y"), QKeySequence("Ctrl+Shift+Z"),
         ])
@@ -607,6 +609,10 @@ class MainWindow(QMainWindow):
                 lambda checked, m=mode: self._set_tool_mode(m)
                 if checked else None
             )
+
+        toolbar.addSeparator()
+        toolbar.addAction(self.undo_action)
+        toolbar.addAction(self.redo_action)
 
         components_toolbar = self.addToolBar("Composants")
         components_toolbar.setMovable(False)
@@ -941,6 +947,8 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "mode_actions"):
             return
         for action in self.mode_actions.values():
+            action.setIcon(self._icon(action.property("iconName")))
+        for action in (self.undo_action, self.redo_action):
             action.setIcon(self._icon(action.property("iconName")))
         for button, menu in self.component_categories.values():
             button.setIcon(self._icon(button.property("iconName")))
