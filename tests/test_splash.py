@@ -7,10 +7,12 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import QPoint
+from PyQt6.QtGui import QImage, QPainter
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtTest import QTest
 
-from ui.splash import LOGO_SVG, SplashScreen
+from ui.splash import BG, HEIGHT, LOGO_SVG, WIDTH, SplashScreen
 
 
 class SplashTest(unittest.TestCase):
@@ -37,6 +39,53 @@ class SplashTest(unittest.TestCase):
         QTest.qWait(700)
         self.assertFalse(splash.isVisible())
         self.assertFalse(splash._timer.isActive())
+
+    def test_angle_progression_is_time_based(self) -> None:
+        splash = SplashScreen()
+        splash.start()
+        QTest.qWait(300)
+        first = splash._angle
+        QTest.qWait(300)
+        second = splash._angle
+        self.assertGreater(second, first)
+        self.assertLess(second, first + 95.0)
+        splash.stop()
+        splash.close()
+
+    def test_splash_window_is_centered_on_screen(self) -> None:
+        splash = SplashScreen()
+        splash.start()
+        screen = splash.screen()
+        self.assertIsNotNone(screen)
+        area = screen.availableGeometry()
+        self.assertEqual(splash.pos(), area.center() - splash.rect().center())
+        splash.stop()
+        splash.close()
+
+    def test_rendered_content_is_centered(self) -> None:
+        splash = SplashScreen()
+        ink = self._ink_bounds(splash)
+        left, right, top, bottom = ink
+        self.assertLessEqual(abs((left + right) / 2.0 - WIDTH / 2.0), 2.0)
+        self.assertLessEqual(abs((top + bottom) / 2.0 - HEIGHT / 2.0), 2.0)
+        self.assertLessEqual(abs((WIDTH - 1 - right) - left), 2)
+
+    @staticmethod
+    def _ink_bounds(splash: SplashScreen) -> tuple[int, int, int, int]:
+        image = QImage(WIDTH, HEIGHT, QImage.Format.Format_ARGB32)
+        image.fill(BG)
+        painter = QPainter(image)
+        splash.render(painter, QPoint(0, 0))
+        painter.end()
+        background = BG.rgb()
+        xs: list[int] = []
+        ys: list[int] = []
+        for y in range(HEIGHT):
+            for x in range(WIDTH):
+                if image.pixel(x, y) != background:
+                    xs.append(x)
+                    ys.append(y)
+        return min(xs), max(xs), min(ys), max(ys)
 
 
 if __name__ == "__main__":
