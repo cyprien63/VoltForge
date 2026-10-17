@@ -449,6 +449,47 @@ t=3.0 : G1.voltage = 6
     engine.end_transient(restore=True)
     check("exécution : valeurs restaurées", g.voltage, 0.0, 1e-12)
 
+    # Durée sans loop, cibles de type « dt1 » intactes
+    prog3, errors3 = parse_scenario(
+        "t=2: C1.v0=3\nt=5: C1.v0=6\nt=1: dt1.resistance=50")
+    check("scénario : durée sans loop, aucune erreur", len(errors3), 0)
+    check("scénario : durée = fin − début (marge incluse)", prog3.duration, 4.5)
+    check("scénario : « dt1 » n'est pas avalé par les directives",
+          [(e.time, e.target) for e in prog3.events],
+          [(1.0, "dt1"), (2.0, "C1"), (5.0, "C1")])
+
+    # Réinjection de v0, renommage en vol, rejeu déterministe
+    c3 = Circuit()
+    g3, (r3, cap3) = build_series(c3, voltage=12.0, ri=0.01, devices=[
+        (Kind.RESISTOR, {"resistance": 100.0, "p_max": 50.0}, 0),
+        (Kind.CAPACITOR, {"capacitance": 1e-3, "v0": 0.0}, 0)])
+    original_label, original_r = r3.label, r3.resistance
+    engine3 = SimulationEngine(c3)
+    engine3.load_program(
+        f"loop 0s 0.4s\ndt 20ms\nt=0: {cap3.label}.v0=5V\n"
+        f"t=0.1: {original_label}.label=RX\nt=0.2: RX.resistance=200")
+    check("v0 : aucun scénario invalide", engine3.program_errors, [])
+    engine3.begin_transient()
+    check("v0 réinjecté : U(C) > 5 V au premier pas",
+          engine3.solution.branch(cap3.label).u > 5.0, True)
+    engine3.advance(0.4)
+    check("lecture terminée", engine3.finished, True)
+    check("renommage : aucun événement perdu", engine3.missing_targets, [])
+    check("renommage : propriété appliquée sous le nouveau nom",
+          r3.resistance, 200.0, 1e-12)
+    check("fin de lecture : snapshot conservé", engine3.snapshot_pending, True)
+    engine3.begin_transient()
+    check("rejeu : nom d'origine restauré", r3.label, original_label)
+    check("rejeu : résistance d'origine restaurée",
+          r3.resistance, original_r, 1e-12)
+    check("rejeu : événement v0 rejoué depuis l'état d'origine",
+          cap3.get_prop("v0"), 5.0, 1e-12)
+    engine3.advance(0.4)
+    engine3.end_transient(restore=True)
+    check("après restauration : v0 d'origine", cap3.get_prop("v0"), 0.0, 1e-12)
+    check("après restauration : snapshot libéré",
+          engine3.snapshot_pending, False)
+
 
 def test_formatting() -> None:
     section("Formatage & analyse des valeurs")
