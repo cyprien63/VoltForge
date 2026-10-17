@@ -649,6 +649,10 @@ class Buzzer(Resistor):
     def resistance(self) -> float:
         return float(self._props["resistance"])
 
+    @property
+    def voltage(self) -> float:
+        return float(self._props["voltage"])
+
     def display_value(self) -> str:
         return f"{si_format(self.resistance, 'Ω')} · {self.voltage:g} V max"
 
