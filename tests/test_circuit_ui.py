@@ -139,6 +139,28 @@ class CircuitEditorTests(unittest.TestCase):
                 self.assertIsInstance(component.display_value(), str)
         self.assertIn("V max", create_component(Kind.BUZZER, 0, 0).display_value())
 
+    def test_all_component_kinds_can_be_selected_and_drawn(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        components = [
+            window.circuit.add(create_component(kind, 80 * index - 800, 0))
+            for index, kind in enumerate(Kind)
+        ]
+        for component in components:
+            self.assertIsInstance(component.display_value(), str, component.kind)
+        window.engine.recompute()
+        window.refresh_results()
+        window.resize(900, 650)
+        window.show()
+        self.app.processEvents()
+        image = QImage(window.canvas.size(), QImage.Format.Format_ARGB32)
+        window.canvas.render(image)
+        for component in components:
+            window.canvas.set_selection(component)
+            window.refresh_inspector()
+            self.assertEqual(window.selection_title.text(),
+                             component.short_description())
+
     def test_battery_negative_terminal_is_grounded_and_simulated(self) -> None:
         circuit = Circuit()
         battery = circuit.add(Battery(-80, 0, rotation=90, label="BAT_TEST"))
