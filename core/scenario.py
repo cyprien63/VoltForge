@@ -19,9 +19,12 @@ DSL simple, en ligne, pour piloter la simulation dans le temps :
 * Commentaires : lignes débutant par ``#``.
 * Propriétés : ``voltage``, ``current``, ``ri``, ``resistance``,
   ``closed``, ``r_on``, ``r_off``, ``capacitance``, ``v0``,
-  ``inductance``, ``r_w``, ``p_max``, ``label``…
+  ``inductance``, ``r_w``, ``p_max``, ``label``, ``blown``…
 * Valeurs booléennes : ``true/false``, ``vrai/faux``, ``on/off``,
   ``open/closed``, ``ouvert/fermé``, ``1/0``.
+* La propriété ``label`` accepte un texte libre (renommage en cours
+  d'exécution) ; ``blown`` permet de griller ou de réarmer un
+  composant à un instant donné.
 
 Indépendant de Qt.
 """
@@ -41,19 +44,24 @@ PROP_ALIASES: Dict[str, str] = {
     "tension": "voltage", "courant": "current", "current": "current",
     "i": "current", "ri": "ri", "r_int": "ri",
     "resistance": "resistance", "r": "resistance",
-    "closed": "closed", "state": "state", "etat": "state",
+    "closed": "closed", "state": "closed", "etat": "closed",
     "switch": "closed", "r_on": "r_on", "ron": "r_on",
     "r_off": "r_off", "roff": "r_off",
     "capacitance": "capacitance", "c": "capacitance",
     "v0": "v0", "inductance": "inductance", "l": "inductance",
     "r_w": "r_w", "rw": "r_w", "p_max": "p_max", "pmax": "p_max",
     "label": "label", "name": "label",
+    "blown": "blown", "grille": "blown", "grillé": "blown",
 }
 
 _EVENT_RE = re.compile(
     r"^\s*([A-Za-z_][\w]*)\s*[.:]\s*(.+)$",          # ident.prop = valeur
 )
 _TIME_RE = re.compile(r"^([tT])\s*=")
+# Directives : nom suivi d'un espace (« dt1.resistance=5 » n'en est pas une)
+_DIRECTIVE_RE = re.compile(r"^(loop|fps|dt|tail)(?=\s)")
+# Propriétés à valeur textuelle libre (pas de conversion numérique)
+_TEXT_PROPS = {"label"}
 
 
 @dataclass
@@ -94,22 +102,22 @@ class ScenarioProgram:
 
     @property
     def duration(self) -> float:
-        """Durée totale : plage loop, sinon dernier événement + marge."""
-        if self.loop is not None:
-            return max(0.0, self.loop[1] - self.loop[0])
-        if not self.events:
-            return 0.0
-        return max(e.time for e in self.events) + self.tail
+        """Durée totale : plage loop, sinon du premier événement au dernier + marge."""
+        return max(0.0, self.end - self.start)
 
     @property
     def start(self) -> float:
-        return self.loop[0] if self.loop is not None else (
-            min((e.time for e in self.events), default=0.0)
-        )
+        if self.loop is not None:
+            return self.loop[0]
+        return min((e.time for e in self.events), default=0.0)
 
     @property
     def end(self) -> float:
-        return self.start + self.duration
+        if self.loop is not None:
+            return self.loop[1]
+        if not self.events:
+            return 0.0
+        return max(e.time for e in self.events) + self.tail
 
     @property
     def frame_count(self) -> int:
@@ -158,9 +166,10 @@ def _parse_scalar(text: str) -> Any:
     """
     s = text.strip()
     low = s.lower()
-    if low in ("true", "vrai", "yes", "on", "closed", "fermé", "ferme", "fermée"):
+    if low in ("true", "vrai", "yes", "on", "closed", "fermé", "ferme",
+               "fermée", "grille", "grillé"):
         return True
-    if low in ("false", "faux", "no", "off", "open", "ouvert"):
+    if low in ("false", "faux", "no", "off", "open", "ouvert", "intact"):
         return False
     return parse_value(s)
 
@@ -192,39 +201,39 @@ def parse_scenario(text: str) -> Tuple[ScenarioProgram, List[ScenarioError]]:
 
         # --- directives ---------------------------------------------------
         low = line.lower()
-        if low.startswith("loop"):
-            parts = line.split()[1:]
-            if len(parts) != 2:
-                errors.append(ScenarioError(lineno, "syntaxe : loop <t0> <t1>", line))
-                continue
-            try:
-                t0, t1 = parse_time(parts[0]), parse_time(parts[1])
-                if t1 <= t0:
-                    raise ValueError("t1 doit être > t0")
-                program.loop = (t0, t1)
-            except ValueError as exc:
-                errors.append(ScenarioError(lineno, f"loop invalide : {exc}", line))
-            continue
-        if low.startswith("fps"):
-            try:
-                val = float(line.split()[1].replace(",", "."))
-                if val <= 0 or val > 120:
-                    raise ValueError("fps attendu entre 1 et 120")
-                program.fps = val
-            except (IndexError, ValueError) as exc:
-                errors.append(ScenarioError(lineno, f"fps invalide : {exc}", line))
-            continue
-        if low.startswith("dt"):
-            try:
-                program.dt = max(1e-4, parse_time(line.split()[1]))
-            except (IndexError, ValueError) as exc:
-                errors.append(ScenarioError(lineno, f"dt invalide : {exc}", line))
-            continue
-        if low.startswith("tail"):
-            try:
-                program.tail = max(0.0, parse_time(line.split()[1]))
-            except (IndexError, ValueError) as exc:
-                errors.append(ScenarioError(lineno, f"tail invalide : {exc}", line))
+        directive = _DIRECTIVE_RE.match(low)
+        if directive:
+            name = directive.group(1)
+            if name == "loop":
+                parts = line.split()[1:]
+                if len(parts) != 2:
+                    errors.append(ScenarioError(lineno, "syntaxe : loop <t0> <t1>", line))
+                    continue
+                try:
+                    t0, t1 = parse_time(parts[0]), parse_time(parts[1])
+                    if t1 <= t0:
+                        raise ValueError("t1 doit être > t0")
+                    program.loop = (t0, t1)
+                except ValueError as exc:
+                    errors.append(ScenarioError(lineno, f"loop invalide : {exc}", line))
+            elif name == "fps":
+                try:
+                    val = float(line.split()[1].replace(",", "."))
+                    if val <= 0 or val > 120:
+                        raise ValueError("fps attendu entre 1 et 120")
+                    program.fps = val
+                except (IndexError, ValueError) as exc:
+                    errors.append(ScenarioError(lineno, f"fps invalide : {exc}", line))
+            elif name == "dt":
+                try:
+                    program.dt = max(1e-4, parse_time(line.split()[1]))
+                except (IndexError, ValueError) as exc:
+                    errors.append(ScenarioError(lineno, f"dt invalide : {exc}", line))
+            else:  # tail
+                try:
+                    program.tail = max(0.0, parse_time(line.split()[1]))
+                except (IndexError, ValueError) as exc:
+                    errors.append(ScenarioError(lineno, f"tail invalide : {exc}", line))
             continue
 
         # --- horodatage facultatif ----------------------------------------
@@ -268,11 +277,18 @@ def parse_scenario(text: str) -> Tuple[ScenarioProgram, List[ScenarioError]]:
                 errors.append(ScenarioError(
                     lineno, f"propriété inconnue {prop_raw.strip()!r}", line))
                 continue
-            try:
-                value = _parse_scalar(value_raw)
-            except ValueError as exc:
-                errors.append(ScenarioError(lineno, f"valeur invalide : {exc}", line))
-                continue
+            if prop in _TEXT_PROPS:
+                # Valeur textuelle (label) : conservée telle quelle
+                value = value_raw.strip()
+                if not value:
+                    errors.append(ScenarioError(lineno, f"label vide dans {action!r}", line))
+                    continue
+            else:
+                try:
+                    value = _parse_scalar(value_raw)
+                except ValueError as exc:
+                    errors.append(ScenarioError(lineno, f"valeur invalide : {exc}", line))
+                    continue
             program.events.append(ScenarioEvent(
                 time=base_time, target=target.strip(), prop=prop,
                 value=value, raw=action, line=lineno,
