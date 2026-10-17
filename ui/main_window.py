@@ -801,13 +801,12 @@ class MainWindow(QMainWindow):
                 color: {text};
                 border: none;
             }}
-            QMenuBar {{ padding: 4px 8px; }}
+            QMenuBar {{ padding: 4px 8px; border-bottom: 1px solid {border}; }}
             QMenuBar::item {{ padding: 6px 10px; border-radius: 5px; }}
             QMenuBar::item:selected, QMenu::item:selected {{ background: {hover}; }}
             QMenu {{ border: 1px solid {border}; padding: 5px; }}
             QMenu::item {{ padding: 6px 24px 6px 10px; border-radius: 4px; }}
             QToolBar {{ spacing: 6px; padding: 6px 8px; border-bottom: 1px solid {border}; }}
-            QToolBar#mainToolbar, QToolBar#componentsToolbar {{ border-top: 1px solid {border}; border-bottom: 1px solid {border}; }}
             QToolBar::separator {{ background: {border}; width: 1px; margin: 4px; }}
             QToolButton {{
                 background: transparent; border: 1px solid transparent;
