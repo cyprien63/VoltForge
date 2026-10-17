@@ -31,7 +31,6 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressDialog,
     QPushButton,
-    QPlainTextEdit,
     QSpinBox,
     QScrollArea,
     QSlider,
@@ -1644,6 +1643,7 @@ class MainWindow(QMainWindow):
             "inductance": "Inductance",
             "r_w": "Résistance de bobine",
             "p_max": "Puissance maximale",
+            "blown": "État grillé",
         }
 
         def add_event_row() -> None:
@@ -1685,8 +1685,8 @@ class MainWindow(QMainWindow):
                 if spec.ptype == "bool":
                     if not isinstance(current, QComboBox):
                         current = QComboBox()
-                        current.addItem("Fermé / activé", "true")
-                        current.addItem("Ouvert / désactivé", "false")
+                        current.addItem("Activé", "true")
+                        current.addItem("Désactivé", "false")
                         table.setCellWidget(row, 3, current)
                     current.setCurrentIndex(
                         current.findData(str(bool(value)).lower())
@@ -1709,6 +1709,9 @@ class MainWindow(QMainWindow):
                     name for name, spec in component.prop_specs().items()
                     if name in supported_properties and spec.ptype in ("float", "bool")
                 ]
+                # « État grillé » existe sur tous les composants (propriété de
+                # base) : sans ce tri il apparaîtrait en premier dans la liste.
+                names.sort(key=lambda name: name == "blown")
                 for name in names:
                     property_editor.addItem(property_labels.get(name, name), name)
                 update_value()
@@ -1773,8 +1776,9 @@ class MainWindow(QMainWindow):
         def start_playback() -> None:
             try:
                 build_scenario()
-                if self.engine.is_transient:
-                    self.engine.end_transient(restore=True)
+                # begin_transient réapplique un snapshot éventuel laissé par
+                # une lecture précédente : chaque lancement repart des mêmes
+                # valeurs d'origine.
                 self.engine.begin_transient(self.engine.program)
                 self.canvas.update()
                 self.refresh_results()
@@ -1794,6 +1798,9 @@ class MainWindow(QMainWindow):
             except ValueError as exc:
                 QMessageBox.warning(dialog, "Paramètres à vérifier", str(exc))
                 return
+            # L'export pilote lui-même le moteur : on ne laisse pas le timer
+            # de lecture avancer en parallèle pendant la capture.
+            self._play_timer.stop()
             filename, _ = QFileDialog.getSaveFileName(
                 dialog, "Exporter l'animation", "simulation.gif", "GIF animé (*.gif)"
             )
@@ -1831,136 +1838,18 @@ class MainWindow(QMainWindow):
         stop_button.clicked.connect(stop_playback)
         gif_button.clicked.connect(make_gif)
         close_button.clicked.connect(dialog.accept)
-        dialog.exec()
 
-    def _open_legacy_scenario_dialog(self) -> None:
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Programme de simulation")
-        dialog.resize(760, 560)
-        layout = QVBoxLayout(dialog)
-        editor = QPlainTextEdit()
-        editor.setPlaceholderText(
-            "loop 0s 3s\nfps 15\nt=0s: G1.voltage = 0V\nt=1s: G1.voltage = 12V"
-        )
-        editor.setPlainText(self.scenario_text)
-        layout.addWidget(editor, 1)
-        info = QLabel(
-            "Syntaxe : t=1s: G1.voltage=12V ; K1.closed=true "
-            "— propriétés séparées par des points-virgules."
-        )
-        info.setWordWrap(True)
-        layout.addWidget(info)
-        button_row = QHBoxLayout()
-        load_button = QPushButton("Charger…")
-        save_button = QPushButton("Enregistrer…")
-        play_button = QPushButton("Lancer")
-        stop_button = QPushButton("Arrêter")
-        gif_button = QPushButton("Exporter en GIF…")
-        close_button = QPushButton("Fermer")
-        for button in (load_button, save_button, play_button, stop_button,
-                       gif_button, close_button):
-            button_row.addWidget(button)
-        layout.addLayout(button_row)
-
-        def load_text():
-            filename, _ = QFileDialog.getOpenFileName(
-                dialog, "Charger un scénario", "", "Scénarios texte (*.txt);;Tous les fichiers (*)"
-            )
-            if filename:
-                try:
-                    editor.setPlainText(Path(filename).read_text(encoding="utf-8"))
-                except OSError as exc:
-                    QMessageBox.critical(dialog, "Lecture impossible", str(exc))
-
-        def save_text():
-            filename, _ = QFileDialog.getSaveFileName(
-                dialog, "Enregistrer le scénario", "scenario.txt",
-                "Scénarios texte (*.txt)",
-            )
-            if filename:
-                try:
-                    Path(filename).write_text(editor.toPlainText(), encoding="utf-8")
-                except OSError as exc:
-                    QMessageBox.critical(dialog, "Écriture impossible", str(exc))
-
-        def start_playback():
-            self._scenario_text_changed(editor.toPlainText())
-            program = self.engine.load_program(self.scenario_text)
-            if self.engine.program_errors:
-                QMessageBox.warning(
-                    dialog, "Scénario invalide",
-                    "\n".join(self.engine.program_errors),
-                )
-                return
-            if program.duration <= 0:
-                QMessageBox.warning(dialog, "Scénario vide",
-                                    "Ajoutez un événement ou une directive loop.")
-                return
-            try:
-                self.engine.begin_transient(program)
-                self.canvas.update()
-                self.refresh_results()
-                self._play_timer.start()
-            except (RuntimeError, ValueError) as exc:
-                QMessageBox.critical(dialog, "Simulation impossible", str(exc))
-
-        def stop_playback():
+        def on_dialog_finished() -> None:
+            # Fermeture (bouton ou croix) : plus de lecture en arrière-plan
+            # et retour aux valeurs d'origine, y compris après la fin
+            # naturelle du scénario (restore=False laissait le snapshot).
             self._play_timer.stop()
-            if self.engine.is_transient:
+            if self.engine.is_transient or self.engine.snapshot_pending:
                 self.engine.end_transient(restore=True)
+            self.canvas.update()
             self.refresh_results()
 
-        def make_gif():
-            self._scenario_text_changed(editor.toPlainText())
-            filename, _ = QFileDialog.getSaveFileName(
-                dialog, "Exporter l'animation", "simulation.gif", "GIF animé (*.gif)"
-            )
-            if not filename:
-                return
-            if not filename.lower().endswith(".gif"):
-                filename += ".gif"
-            self.engine.load_program(self.scenario_text)
-            if self.engine.program_errors:
-                QMessageBox.warning(
-                    dialog, "Scénario invalide",
-                    "\n".join(self.engine.program_errors),
-                )
-                return
-            progress = QProgressDialog(
-                "Simulation et capture des images…", None, 0,
-                max(1, self.engine.program.frame_count), dialog,
-            )
-            progress.setWindowTitle("Export GIF")
-            progress.setWindowModality(Qt.WindowModality.WindowModal)
-            progress.setMinimumDuration(0)
-            try:
-                count = export_gif(
-                    self.engine, self.canvas, self.scenario_text, filename,
-                    lambda current, total: (
-                        progress.setMaximum(total),
-                        progress.setValue(current),
-                        QApplication_process_events(),
-                    ),
-                )
-                QMessageBox.information(
-                    dialog, "Export terminé",
-                    f"GIF créé avec {count} images :\n{filename}",
-                )
-            except (OSError, ValueError, RuntimeError) as exc:
-                QMessageBox.critical(dialog, "Export impossible", str(exc))
-            finally:
-                progress.close()
-                self.refresh_results()
-
-        load_button.clicked.connect(load_text)
-        save_button.clicked.connect(save_text)
-        play_button.clicked.connect(start_playback)
-        stop_button.clicked.connect(stop_playback)
-        gif_button.clicked.connect(make_gif)
-        close_button.clicked.connect(dialog.accept)
-        dialog.finished.connect(
-            lambda: self._scenario_text_changed(editor.toPlainText())
-        )
+        dialog.finished.connect(on_dialog_finished)
         dialog.exec()
 
     def _advance_playback(self) -> None:
