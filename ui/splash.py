@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import math
-import time
 from pathlib import Path
 
 from PyQt6.QtCore import (
     QEasingCurve,
+    QElapsedTimer,
     QPointF,
     QPropertyAnimation,
     Qt,
@@ -42,8 +42,12 @@ WIDTH = 340
 HEIGHT = 300
 LOGO_SIZE = 132.0
 ORBIT_RADIUS = 84.0
+ORBIT_PEN = 4.5
 TRAIL_SEGMENTS = 14
 TRAIL_STEP_DEG = 9.0
+
+SPEED_DEG_PER_S = 95.0
+PULSE_SPEED = 1.6
 
 
 class SplashScreen(QSplashScreen):
@@ -59,17 +63,18 @@ class SplashScreen(QSplashScreen):
             | Qt.WindowType.WindowStaysOnTopHint
         )
         self._renderer = QSvgRenderer(str(LOGO_SVG))
+        self._clock = QElapsedTimer()
         self._angle = 0.0
         self._pulse = 0.0
-        self._started_at = 0.0
         self._fade: QPropertyAnimation | None = None
         self._timer = QTimer(self)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.setInterval(FRAME_MS)
         self._timer.timeout.connect(self._advance)
-        self.repaint()
+        self.update()
 
     def start(self) -> None:
-        self._started_at = time.monotonic()
+        self._clock.start()
         self.show()
         self._timer.start()
 
@@ -77,9 +82,10 @@ class SplashScreen(QSplashScreen):
         self._timer.stop()
 
     def _advance(self) -> None:
-        self._angle = (self._angle + 4.5) % 360.0
-        self._pulse += 0.09
-        self.repaint()
+        seconds = self._clock.elapsed() / 1000.0
+        self._angle = (seconds * SPEED_DEG_PER_S) % 360.0
+        self._pulse = seconds * PULSE_SPEED
+        self.update()
 
     def paintEvent(self, event) -> None:  # noqa: D102
         painter = QPainter(self)
@@ -124,7 +130,7 @@ class SplashScreen(QSplashScreen):
             else:
                 color = QColor(ORANGE)
             color.setAlphaF(fade * fade)
-            pen = QPen(color, 4.5 if i == 0 else 3.5)
+            pen = QPen(color, ORBIT_PEN if i == 0 else 3.5)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             painter.setPen(pen)
             start = -(self._angle + i * TRAIL_STEP_DEG)
@@ -141,7 +147,8 @@ class SplashScreen(QSplashScreen):
             Qt.AlignmentFlag.AlignHCenter, "VoltForge",
         )
 
-        dots = "." * (1 + int(self._pulse / 1.2) % 3)
+        seconds = self._pulse / PULSE_SPEED
+        dots = "." * (1 + int(seconds * 2.5) % 3)
         body = QFont()
         body.setPixelSize(13)
         painter.setFont(body)
@@ -152,7 +159,7 @@ class SplashScreen(QSplashScreen):
         )
 
     def finish(self, widget: QWidget) -> None:
-        elapsed_ms = (time.monotonic() - self._started_at) * 1000.0
+        elapsed_ms = float(self._clock.elapsed())
         remaining = max(MIN_VISIBLE_MS - elapsed_ms, 0.0)
         QTimer.singleShot(int(remaining), lambda: self._fade_out(widget))
 
