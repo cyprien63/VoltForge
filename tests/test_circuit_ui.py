@@ -130,6 +130,15 @@ class CircuitEditorTests(unittest.TestCase):
         restored = Circuit.from_dict(circuit.to_dict())
         self.assertIsInstance(restored.get(heater.label), Heater)
 
+    def test_all_component_kinds_expose_a_display_value(self) -> None:
+        for kind in Kind:
+            component = create_component(kind, 0, 0)
+            with self.subTest(kind=kind.value):
+                self.assertIsInstance(component.display_value(), str)
+                component.set_prop("blown", True)
+                self.assertIsInstance(component.display_value(), str)
+        self.assertIn("V max", create_component(Kind.BUZZER, 0, 0).display_value())
+
     def test_battery_negative_terminal_is_grounded_and_simulated(self) -> None:
         circuit = Circuit()
         battery = circuit.add(Battery(-80, 0, rotation=90, label="BAT_TEST"))
