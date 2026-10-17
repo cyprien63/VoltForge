@@ -5,6 +5,7 @@ Aucun import Qt : ce paquet est testable en headless via
 """
 
 from .circuit import Circuit, CircuitNode
+from .history import History
 from .components import (
     GRID_SIZE,
     Ammeter,
@@ -47,7 +48,8 @@ from .solver import BranchResult, Solution, Solver
 from .voltage_arrow import VoltageArrow
 
 __all__ = [
-    "Circuit", "CircuitNode", "Component", "Kind", "SourceType", "Terminal",
+    "Circuit", "CircuitNode", "History", "Component", "Kind", "SourceType",
+    "Terminal",
     "Wire", "create_component", "snap", "GRID_SIZE",
     "Generator", "Resistor", "Thermistor", "Photoresistor", "Heater",
     "Speaker", "Buzzer", "Potentiometer", "Switch", "PushButton", "Capacitor",

@@ -12,11 +12,11 @@ import zipfile
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPoint, QSize, Qt, QTimer
-from PyQt6.QtGui import QIcon, QImage
+from PyQt6.QtGui import QIcon, QImage, QKeySequence
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import (
     QApplication, QPlainTextEdit, QPushButton, QMessageBox, QScrollArea,
-    QTableWidget,
+    QTableWidget, QToolBar, QStyle,
 )
 from PIL import Image, ImageChops
 
@@ -945,6 +945,202 @@ class CircuitEditorTests(unittest.TestCase):
         self.assertIn("#f3f6fb", window.styleSheet())
         window.set_theme("dark")
         self.assertIn("#111a24", window.styleSheet())
+
+
+class UndoRedoTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def tearDown(self) -> None:
+        for widget in QApplication.topLevelWidgets():
+            if isinstance(widget, MainWindow):
+                widget.is_dirty = False
+
+    def test_menu_exposes_annuler_and_retablir_shortcuts(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        self.assertFalse(window.undo_action.isEnabled())
+        self.assertFalse(window.redo_action.isEnabled())
+        self.assertEqual(window.undo_action.shortcut(),
+                         QKeySequence.StandardKey.Undo)
+        self.assertEqual(
+            [seq.toString() for seq in window.redo_action.shortcuts()],
+            ["Ctrl+Y", "Ctrl+Shift+Z"],
+        )
+
+    def test_undo_redo_restores_added_component(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        window.circuit.add(Resistor(0, 0, label="R_UNDO"))
+        window._circuit_changed()
+
+        self.assertTrue(window.undo_action.isEnabled())
+        self.assertEqual([c.label for c in window.circuit.components], ["R_UNDO"])
+        window.undo()
+        self.assertEqual(window.circuit.components, [])
+        self.assertTrue(window.redo_action.isEnabled())
+
+        window.redo()
+        self.assertEqual([c.label for c in window.circuit.components], ["R_UNDO"])
+
+    def test_undo_restores_rotation_and_property_edit(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        resistor = window.circuit.add(
+            Resistor(0, 0, resistance=100, label="R_HIST")
+        )
+        window._circuit_changed()
+
+        window.canvas.rotate_component(resistor)
+        self.assertEqual(window.circuit.get("R_HIST").rotation, 90)
+        window.undo()
+        self.assertEqual(window.circuit.get("R_HIST").rotation, 0)
+
+        component = window.circuit.get("R_HIST")
+        component.set_prop("resistance", 220)
+        window._circuit_changed()
+        window.undo()
+        self.assertEqual(window.circuit.get("R_HIST").resistance, 100)
+
+    def test_move_drag_is_recorded_as_a_single_step(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        window.circuit.add(Resistor(0, 0, label="R_DRAG_HIST"))
+        window._circuit_changed()
+        window.resize(900, 650)
+        window.show()
+        self.app.processEvents()
+        canvas = window.canvas
+        center = QPoint(canvas.width() // 2, canvas.height() // 2)
+
+        QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=center)
+        QTest.mouseMove(canvas, center + QPoint(40, 0))
+        QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton,
+                           pos=center + QPoint(40, 0))
+        self.assertEqual(window.circuit.get("R_DRAG_HIST").position, (40.0, 0.0))
+
+        window.undo()
+        self.assertEqual(window.circuit.get("R_DRAG_HIST").position, (0.0, 0.0))
+
+    def test_wire_and_deletion_can_be_undone(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        window.circuit.add(Resistor(0, 0, label="R_WIRE_HIST"))
+        window._circuit_changed()
+        window.canvas.set_selection(window.circuit.get("R_WIRE_HIST"))
+        window.circuit.add_wire([(20, 0), (80, 0)])
+        window._circuit_changed()
+        self.assertEqual(len(window.circuit.wires), 1)
+
+        window.delete_selected()
+        self.assertEqual(window.circuit.components, [])
+        self.assertEqual(window.circuit.wires, [])
+
+        window.undo()
+        self.assertEqual(
+            [c.label for c in window.circuit.components], ["R_WIRE_HIST"]
+        )
+        self.assertEqual(len(window.circuit.wires), 1)
+        window.redo()
+        self.assertEqual(window.circuit.components, [])
+        self.assertEqual(window.circuit.wires, [])
+
+    def test_undo_redo_is_cleared_on_new_project(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        window.circuit.add(Resistor(0, 0, label="R_CLEAR"))
+        window._circuit_changed()
+        self.assertTrue(window.undo_action.isEnabled())
+
+        window.is_dirty = False
+        window.new_project()
+        self.assertFalse(window.undo_action.isEnabled())
+        self.assertFalse(window.redo_action.isEnabled())
+        self.assertEqual(window.circuit.components, [])
+
+    def test_toolbar_exposes_undo_redo_buttons(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        toolbar = window.findChild(QToolBar, "mainToolbar")
+        actions = {action.text(): action for action in toolbar.actions()}
+        self.assertIs(actions["Annuler"], window.undo_action)
+        self.assertIs(actions["Rétablir"], window.redo_action)
+        self.assertTrue(actions["Annuler"].icon().isNull() is False)
+
+        window.circuit.add(Resistor(0, 0, label="R_BTN"))
+        window._circuit_changed()
+        self.assertTrue(actions["Annuler"].isEnabled())
+        actions["Annuler"].trigger()
+        self.assertEqual(window.circuit.components, [])
+        self.assertTrue(actions["Rétablir"].isEnabled())
+        actions["Rétablir"].trigger()
+        self.assertEqual([c.label for c in window.circuit.components], ["R_BTN"])
+
+    def test_toolbar_undo_redo_buttons_are_small_icons_without_text(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        toolbar = window.findChild(QToolBar, "mainToolbar")
+        buttons = [
+            toolbar.widgetForAction(window.undo_action),
+            toolbar.widgetForAction(window.redo_action),
+        ]
+        for button in buttons:
+            self.assertIsNotNone(button)
+            self.assertEqual(button.objectName(), "historyButton")
+            self.assertEqual(button.toolButtonStyle(),
+                             Qt.ToolButtonStyle.ToolButtonIconOnly)
+            self.assertFalse(button.icon().isNull())
+            self.assertLess(button.iconSize().width(), toolbar.iconSize().width())
+        self.assertTrue(window.undo_action.text())
+        self.assertTrue(window.redo_action.text())
+        self.assertIn("QToolButton#historyButton", window.styleSheet())
+
+    def test_toolbar_undo_redo_buttons_are_tightly_grouped(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        window.resize(1100, 700)
+        window.show()
+        self.app.processEvents()
+        toolbar = window.findChild(QToolBar, "mainToolbar")
+        undo_button = toolbar.widgetForAction(window.undo_action)
+        redo_button = toolbar.widgetForAction(window.redo_action)
+        gap = redo_button.x() - (undo_button.x() + undo_button.width())
+        self.assertGreaterEqual(gap, 0)
+        self.assertLessEqual(gap, 20)
+        self.assertLessEqual(undo_button.width(), undo_button.iconSize().width() + 16)
+
+    def test_voltage_arrow_creation_and_deletion_are_undoable(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        arrow = VoltageArrow((0, 0), (80, 40), circuit=window.circuit)
+        window.circuit.arrows.append(arrow)
+        window.circuit.recompute_nodes()
+        window.canvas.set_selection(arrow)
+        window._circuit_changed()
+        self.assertEqual(len(window.circuit.arrows), 1)
+
+        window.delete_selected()
+        self.assertEqual(window.circuit.arrows, [])
+        window.undo()
+        self.assertEqual(len(window.circuit.arrows), 1)
+        window.redo()
+        self.assertEqual(window.circuit.arrows, [])
+
+    def test_quick_parameter_edit_is_undoable(self) -> None:
+        window = MainWindow()
+        self.addCleanup(window.close)
+        lamp = window.circuit.add(Lamp(0, 0, resistance=100, label="L_QUICK"))
+        window._circuit_changed()
+        window.canvas.set_selection(lamp)
+        window.refresh_inspector()
+        resistance_editor = window._quick_parameter_controls["resistance"][1]
+        resistance_editor.setValue(25)
+        window._commit_quick_parameters()
+
+        self.assertEqual(window.circuit.get("L_QUICK").resistance, 25)
+        window.undo()
+        self.assertEqual(window.circuit.get("L_QUICK").resistance, 100)
 
 
 if __name__ == "__main__":

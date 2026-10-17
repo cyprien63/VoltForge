@@ -44,6 +44,7 @@ from PyQt6.QtWidgets import (
 )
 
 from core.circuit import Circuit
+from core.history import History
 from core.components import (
     Ammeter,
     Capacitor,
@@ -479,6 +480,8 @@ class MainWindow(QMainWindow):
         self.project_path: Path | None = None
         self.scenario_text = ""
         self.is_dirty = False
+        self.history = History()
+        self._restoring_history = False
         self.theme = QSettings("VoltForge", "VoltForge").value("theme", "dark")
         self._play_timer = QTimer(self)
         self._play_timer.setInterval(20)
@@ -490,6 +493,7 @@ class MainWindow(QMainWindow):
         self.engine.recompute()
         self.refresh_inspector()
         self.refresh_results()
+        self._reset_history()
         self.statusBar().showMessage("Prêt — choisissez un outil et cliquez sur la grille.")
         self._refresh_title()
 
@@ -517,6 +521,24 @@ class MainWindow(QMainWindow):
             )
         file_menu.addSeparator()
         self._add_action(file_menu, "Quitter", self.close, QKeySequence.StandardKey.Quit)
+
+        edit_menu = self.menuBar().addMenu("Édition")
+        self.undo_action = QAction(
+            QIcon(str(self._icon_path("undo.svg"))), "Annuler", self
+        )
+        self.undo_action.setProperty("iconName", "undo.svg")
+        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self.undo_action.triggered.connect(self.undo)
+        edit_menu.addAction(self.undo_action)
+        self.redo_action = QAction(
+            QIcon(str(self._icon_path("redo.svg"))), "Rétablir", self
+        )
+        self.redo_action.setProperty("iconName", "redo.svg")
+        self.redo_action.setShortcuts([
+            QKeySequence("Ctrl+Y"), QKeySequence("Ctrl+Shift+Z"),
+        ])
+        self.redo_action.triggered.connect(self.redo)
+        edit_menu.addAction(self.redo_action)
 
         simulation_menu = self.menuBar().addMenu("Simulation")
         self._add_action(simulation_menu, "Configurer / lancer…", self.open_scenario_dialog)
@@ -591,6 +613,17 @@ class MainWindow(QMainWindow):
                 lambda checked, m=mode: self._set_tool_mode(m)
                 if checked else None
             )
+
+        toolbar.addSeparator()
+        for action in (self.undo_action, self.redo_action):
+            toolbar.addAction(action)
+            button = toolbar.widgetForAction(action)
+            if button is not None:
+                button.setObjectName("historyButton")
+                button.setToolButtonStyle(
+                    Qt.ToolButtonStyle.ToolButtonIconOnly
+                )
+                button.setIconSize(QSize(18, 18))
 
         components_toolbar = self.addToolBar("Composants")
         components_toolbar.setMovable(False)
@@ -812,6 +845,7 @@ class MainWindow(QMainWindow):
                 background: transparent; border: 1px solid transparent;
                 border-radius: 4px; padding: 6px 8px;
             }}
+            QToolButton#historyButton {{ padding: 6px 2px; }}
             QToolButton:hover, QPushButton:hover {{ background: {hover}; }}
             QToolButton:checked {{ background: {selected}; color: {accent}; border: 1px solid {accent}; }}
             QPushButton {{
@@ -926,6 +960,8 @@ class MainWindow(QMainWindow):
             return
         for action in self.mode_actions.values():
             action.setIcon(self._icon(action.property("iconName")))
+        for action in (self.undo_action, self.redo_action):
+            action.setIcon(self._icon(action.property("iconName")))
         for button, menu in self.component_categories.values():
             button.setIcon(self._icon(button.property("iconName")))
             for action in menu.actions():
@@ -957,6 +993,54 @@ class MainWindow(QMainWindow):
         self._refresh_title()
         self.refresh_inspector()
         self.refresh_results()
+        if not self._restoring_history:
+            self._push_history()
+
+    def _push_history(self) -> None:
+        """Enregistre l'état courant comme une étape annulable."""
+        self.history.push(self.circuit.to_dict())
+        self._update_history_actions()
+
+    def _reset_history(self) -> None:
+        """Repart d'un historique vierge (nouveau projet, ouverture)."""
+        self.history.reset(self.circuit.to_dict())
+        self._update_history_actions()
+
+    def _update_history_actions(self) -> None:
+        if hasattr(self, "undo_action"):
+            self.undo_action.setEnabled(self.history.can_undo)
+            self.redo_action.setEnabled(self.history.can_redo)
+
+    def _apply_history_state(self, state) -> None:
+        self._restoring_history = True
+        try:
+            circuit = Circuit.from_dict(state)
+            self.circuit = circuit
+            self.engine = SimulationEngine(circuit)
+            self.canvas.circuit = circuit
+            self.canvas.engine = self.engine
+            self.canvas.set_selections([])
+            self.engine.recompute()
+            self._circuit_changed()
+        finally:
+            self._restoring_history = False
+        self._update_history_actions()
+
+    def undo(self) -> None:
+        if self._play_timer.isActive():
+            return
+        state = self.history.undo()
+        if state is None:
+            return
+        self._apply_history_state(state)
+
+    def redo(self) -> None:
+        if self._play_timer.isActive():
+            return
+        state = self.history.redo()
+        if state is None:
+            return
+        self._apply_history_state(state)
 
     def _selection_changed(self, item) -> None:
         self.refresh_inspector()
@@ -1126,6 +1210,8 @@ class MainWindow(QMainWindow):
             lambda new_value, prop=name, current=component:
             self._quick_parameter_changed(current, prop, new_value)
         )
+        slider.sliderReleased.connect(self._commit_quick_parameters)
+        spinbox.editingFinished.connect(self._commit_quick_parameters)
         self._sync_quick_parameter_controls(component)
 
     def _quick_slider_to_value(self, control, position: int) -> float:
@@ -1166,6 +1252,10 @@ class MainWindow(QMainWindow):
         self.is_dirty = True
         self._refresh_title()
         self.refresh_results()
+
+    def _commit_quick_parameters(self) -> None:
+        """Termine un réglage en direct et l'annote dans l'historique."""
+        self._push_history()
 
     def _sync_quick_parameter_controls(self, component: Component) -> None:
         for name, control in self._quick_parameter_controls.items():
@@ -1377,6 +1467,7 @@ class MainWindow(QMainWindow):
         self.engine.recompute()
         self._circuit_changed()
         self.is_dirty = False
+        self._reset_history()
         self._refresh_title()
 
     def open_project(self) -> None:
@@ -1407,6 +1498,7 @@ class MainWindow(QMainWindow):
             self.engine.recompute()
             self._circuit_changed()
             self.is_dirty = False
+            self._reset_history()
             self._refresh_title()
         except (
             OSError, ValueError, KeyError, TypeError, UnicodeDecodeError,
