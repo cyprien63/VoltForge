@@ -8,17 +8,20 @@ programme séquentiel :
   courants dans l'interface.
 * **Mode transitoire** : ``begin_transient()`` / ``advance(dt)`` rejouent
   un scénario pas à pas (modèles compagnons), pour la lecture en temps
-  réel **et** l'enregistrement GIF.
+  réel **et** l'enregistrement GIF. Les propriétés d'origine sont
+  mémorisées à l'identité (labels compris) : relancer une lecture
+  repart toujours des mêmes valeurs de départ, éventuellement renommées
+  en cours de route, sans jamais écraser une valeur grillée.
 
 Indépendant de Qt.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .circuit import Circuit
-from .scenario import ScenarioError, ScenarioProgram, parse_scenario
+from .scenario import ScenarioProgram, parse_scenario
 from .solver import Solution, Solver
 
 
@@ -35,7 +38,7 @@ class SimulationEngine:
         self.playing: bool = False
         self.t: float = 0.0
         self._cursor: int = 0
-        self._snapshot: Dict[str, Dict[str, Any]] = {}
+        self._snapshot: List[Tuple[Any, Dict[str, Any]]] = []
         self._missing: List[str] = []
 
     # ------------------------------------------------------------------
@@ -60,31 +63,41 @@ class SimulationEngine:
         """Analyse un scénario textuel et mémorise les erreurs éventuelles."""
         program, errors = parse_scenario(text)
         self.program = program
-        self.program_errors = [
-            f"Ligne {e.line} : {e.message}" for e in errors
-        ] + [str(e) for e in errors if isinstance(e, ScenarioError)]
-        # dédoublonnage simple
         seen, uniq = set(), []
-        for msg in self.program_errors:
+        for e in errors:
+            msg = f"Ligne {e.line} : {e.message}"
             if msg not in seen:
                 seen.add(msg)
                 uniq.append(msg)
         self.program_errors = uniq
         return program
 
+    @property
+    def snapshot_pending(self) -> bool:
+        """Vrai si un snapshot de restauration attend la prochaine lecture."""
+        return bool(self._snapshot)
+
     def begin_transient(self, program: Optional[ScenarioProgram] = None,
                         restore_after: bool = True) -> Solution:
-        """Démarre une simulation transitoire (snapshot des propriétés)."""
+        """Démarre une simulation transitoire (snapshot des propriétés).
+
+        Si un snapshot est resté en attente (lecture précédente non
+        explicitement restaurée), il est réappliqué d'abord : chaque
+        exécution repart donc des mêmes valeurs de départ. Le snapshot
+        est ensuite reconstruit à l'identité, label compris.
+        """
         prog = program or self.program
         if prog is None:
             raise RuntimeError("Aucun programme de simulation chargé.")
+        if self._snapshot:
+            self.restore_snapshot()
         if restore_after:
-            self._snapshot = {
-                c.label: {k: v for k, v in c.props().items()}
+            self._snapshot = [
+                (c, {k: v for k, v in c.props().items()})
                 for c in self.circuit.components
-            }
+            ]
         else:
-            self._snapshot = {}
+            self._snapshot = []
         self._missing = []
         self.program = prog
         self.playing = True
@@ -133,22 +146,30 @@ class SimulationEngine:
         return self.program is not None and not self.playing
 
     def end_transient(self, restore: bool = True) -> Solution:
-        """Termine la lecture ; restaure les propriétés d'origine si demandé."""
+        """Termine la lecture ; restaure les propriétés d'origine si demandé.
+
+        Avec ``restore=False``, le snapshot est conservé : l'état final
+        de la simulation reste le nouveau point de départ et pourra être
+        réappliqué à la lecture suivante (rejeu reproductible).
+        """
         self.playing = False
-        if restore and self._snapshot:
-            self.restore_snapshot()
-        self._snapshot = {}
+        if restore:
+            if self._snapshot:
+                self.restore_snapshot()
+            self._snapshot = []
         self.t = 0.0
         self._cursor = 0
         self.solution = self.solver.solve(dt=None, t=0.0)
         return self.solution
 
     def restore_snapshot(self) -> None:
-        """Remet les valeurs d'origine (annule les mutations du scénario)."""
-        for comp in self.circuit.components:
-            saved = self._snapshot.get(comp.label)
-            if not saved:
-                continue
+        """Remet les valeurs d'origine (annule les mutations du scénario).
+
+        Les composants sont retrouvés par identité, pas par label : un
+        renommage pendant la simulation ne casse pas la restauration.
+        Un composant grillé pendant la lecture reste grillé.
+        """
+        for comp, saved in self._snapshot:
             burned_during_simulation = bool(comp.get_prop("blown"))
             for k, v in saved.items():
                 if k == "blown":
