@@ -825,14 +825,13 @@ class MainWindow(QMainWindow):
                 border: 1px solid {danger};
             }}
             QGroupBox {{
-                background: {panel}; border: 1px solid {border}; border-radius: 0px;
-                margin-top: 14px; padding: 10px 9px 9px 9px;
+                background: {panel}; border: 1px solid {border}; border-radius: 6px;
+                margin-top: 10px; padding: 9px;
             }}
             QGroupBox::title {{
                 subcontrol-origin: margin; subcontrol-position: top left;
-                left: 12px; padding: 0 6px; color: {muted};
-                font-weight: 600; text-transform: uppercase;
-                letter-spacing: 1px; font-size: 8.5pt;
+                left: 10px; padding: 0 6px; background: {panel};
+                color: {text}; font-weight: 600; font-size: 10pt;
             }}
             QLineEdit, QDoubleSpinBox, QSpinBox, QComboBox, QTableWidget,
             QPlainTextEdit {{
@@ -851,7 +850,7 @@ class MainWindow(QMainWindow):
             QHeaderView::section {{
                 background: transparent; color: {muted};
                 border: none; border-bottom: 1px solid {border};
-                padding: 4px 6px; font-weight: 600; font-size: 8.5pt;
+                padding: 4px 6px; font-weight: 600; font-size: 9pt;
             }}
             QTableCornerButton::section {{ background: transparent; border: none; }}
             QScrollArea {{ background: transparent; border: none; }}
@@ -874,10 +873,8 @@ class MainWindow(QMainWindow):
             }}
             QLabel#selectionDetail {{ color: {text}; background: transparent; padding: 6px; border: 1px solid {border}; }}
             QLabel#sectionHeading {{
-                color: {muted}; font-weight: 600; text-transform: uppercase;
-                letter-spacing: 1px; font-size: 8.5pt;
-                border-top: 1px solid {border}; border-bottom: 1px solid {border};
-                padding-top: 6px; padding-bottom: 6px; margin-top: 4px;
+                color: {text}; font-weight: 600; font-size: 10pt;
+                padding: 2px 0;
             }}
             QLabel#resultsDetail {{ color: {muted}; font-size: 9pt; }}
             QLabel#mutedText {{ color: {muted}; font-size: 9pt; }}
