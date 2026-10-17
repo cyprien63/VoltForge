@@ -63,7 +63,7 @@
 
 ## Améliorations facultatives
 
-- [ ] Ajouter annuler/rétablir (Undo/Redo).
+- [x] Ajouter annuler/rétablir (Undo/Redo).
 - [ ] Ajouter des courbes temporelles interactives pour les mesures.
 - [ ] Permettre de définir des composants personnalisés à plusieurs broches et
   des sous-circuits, au-delà du modèle résistif à deux bornes.
