@@ -131,26 +131,48 @@ class ScenarioProgram:
             cursor += 1
         return cursor
 
-    def apply_upto(self, components_by_label: Dict[str, Any], t: float,
-                   cursor: int, errors: Optional[List[str]] = None) -> int:
-        """Applique tous les événements ≤ ``t`` ; retourne le curseur."""
+    def apply_upto(self, components: Any, t: float, cursor: int,
+                   errors: Optional[List[str]] = None) -> int:
+        """Applique tous les événements ≤ ``t`` ; retourne le curseur.
+
+        ``components`` expose une recherche insensible à la casse via
+        ``.get(label)`` (un ``Circuit``) : un renommage effectué en cours
+        de scénario est donc visible dès les événements suivants.
+        """
         while cursor < len(self.events) and self.events[cursor].time <= t + 1e-9:
             ev = self.events[cursor]
-            comp = components_by_label.get(ev.target.lower())
+            comp = components.get(ev.target) if hasattr(components, "get") else None
             if comp is None:
                 msg = f"composant introuvable : {ev.target}"
+                if errors is not None and msg not in errors:
+                    errors.append(msg)
+            elif not hasattr(comp, "set_prop"):
+                msg = f"{ev.target} : cible non simulable (fil ou flèche)"
                 if errors is not None and msg not in errors:
                     errors.append(msg)
             else:
                 try:
                     comp.set_prop(ev.prop, ev.value)
-                except (ValueError, KeyError) as exc:
-                    if errors is not None:
-                        msg = f"{ev.target}.{ev.prop}: {exc}"
-                        if msg not in errors:
-                            errors.append(msg)
+                except (ValueError, KeyError, TypeError, AttributeError) as exc:
+                    msg = f"{ev.target}.{ev.prop}: {exc}"
+                    if errors is not None and msg not in errors:
+                        errors.append(msg)
+                else:
+                    self._sync_transient_state(comp, ev)
             cursor += 1
         return cursor
+
+    @staticmethod
+    def _sync_transient_state(comp: Any, ev: ScenarioEvent) -> None:
+        """Réinjecte dans l'état transitoire une propriété qui le pilote.
+
+        Sans cela, « t=0: C1.v0=5 » modifiait la propriété mais le
+        condensateur continuait à se charger depuis sa valeur d'origine.
+        """
+        if ev.prop == "v0":
+            state = getattr(comp, "tstate", None)
+            if isinstance(state, dict):
+                state["v"] = comp.get_prop("v0")
 
 
 # ---------------------------------------------------------------------------

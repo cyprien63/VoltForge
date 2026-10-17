@@ -92,10 +92,9 @@ class SimulationEngine:
         self._cursor = 0
         self.solver.reset_transient()
         # Applique les événements déjà dus à l'instant initial (t0)
-        by_label = {c.label.lower(): c for c in self.circuit.components}
-        self._cursor = prog.apply_upto(by_label, self.t, self._cursor, self._missing)
-        # Re résout les nœuds (les bornes ne bougent pas, mais la masse
-        # peut changer si on a modifié un label — on garde la topologie)
+        self._cursor = prog.apply_upto(self.circuit, self.t, self._cursor,
+                                       self._missing)
+        # Résolution du circuit à l'instant initial (t0)
         self.solution = self.solver.solve(dt=prog.dt, t=self.t)
         return self.solution
 
@@ -105,7 +104,6 @@ class SimulationEngine:
             return self.solution
         prog = self.program
         target = min(self.t + dt, prog.end)
-        by_label = {c.label.lower(): c for c in self.circuit.components}
         while self.t < target - 1e-9:
             next_event_t = self._next_event_time()
             step = min(prog.dt, target - self.t)
@@ -113,11 +111,11 @@ class SimulationEngine:
                 step = min(step, max(0.0, next_event_t - self.t))
             if step <= 1e-12:
                 # événements dus : application puis reprise
-                self._cursor = prog.apply_upto(by_label, self.t, self._cursor,
-                                               self._missing)
+                self._cursor = prog.apply_upto(self.circuit, self.t,
+                                               self._cursor, self._missing)
                 continue
             self.t += step
-            self._cursor = prog.apply_upto(by_label, self.t, self._cursor,
+            self._cursor = prog.apply_upto(self.circuit, self.t, self._cursor,
                                            self._missing)
             self.solution = self.solver.solve(dt=step, t=self.t)
         if self.t >= prog.end - 1e-9:
