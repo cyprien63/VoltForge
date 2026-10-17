@@ -10,6 +10,7 @@ from PyQt6.QtCore import (
     QElapsedTimer,
     QPointF,
     QPropertyAnimation,
+    QRectF,
     Qt,
     QTimer,
 )
@@ -21,7 +22,7 @@ from PyQt6.QtGui import (
     QPixmap,
 )
 from PyQt6.QtSvg import QSvgRenderer
-from PyQt6.QtWidgets import QGraphicsOpacityEffect, QSplashScreen, QWidget
+from PyQt6.QtWidgets import QApplication, QGraphicsOpacityEffect, QSplashScreen, QWidget
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets" / "icons"
 LOGO_SVG = ASSETS / "voltforge.svg"
@@ -49,6 +50,31 @@ TRAIL_STEP_DEG = 9.0
 SPEED_DEG_PER_S = 95.0
 PULSE_SPEED = 1.6
 
+TITLE_H = 30
+SUBTITLE_H = 16
+GAP_ORBIT_TITLE = 14.0
+GAP_TITLE_SUBTITLE = 6.0
+
+
+def content_layout() -> tuple[float, float, float]:
+    """Retourne (centre vertical de l'orbite, y du titre, y du sous-titre).
+
+    Le bloc complet (orbite + textes) est centré verticalement dans la fenêtre.
+    """
+    orbit_span = ORBIT_RADIUS * 2.0 + ORBIT_PEN
+    content_h = (
+        orbit_span
+        + GAP_ORBIT_TITLE
+        + TITLE_H
+        + GAP_TITLE_SUBTITLE
+        + SUBTITLE_H
+    )
+    top = (HEIGHT - content_h) / 2.0
+    orbit_cy = top + orbit_span / 2.0
+    title_y = top + orbit_span + GAP_ORBIT_TITLE
+    subtitle_y = title_y + TITLE_H + GAP_TITLE_SUBTITLE
+    return orbit_cy, title_y, subtitle_y
+
 
 class SplashScreen(QSplashScreen):
     """Petite animation de chargement autour du logo VoltForge."""
@@ -75,11 +101,19 @@ class SplashScreen(QSplashScreen):
 
     def start(self) -> None:
         self._clock.start()
+        self._center_on_screen()
         self.show()
         self._timer.start()
 
     def stop(self) -> None:
         self._timer.stop()
+
+    def _center_on_screen(self) -> None:
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return
+        area = screen.availableGeometry()
+        self.move(area.center() - self.rect().center())
 
     def _advance(self) -> None:
         seconds = self._clock.elapsed() / 1000.0
@@ -93,10 +127,11 @@ class SplashScreen(QSplashScreen):
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         painter.fillRect(self.rect(), BG)
 
-        center = QPointF(WIDTH / 2.0, 128.0)
+        orbit_cy, title_y, subtitle_y = content_layout()
+        center = QPointF(WIDTH / 2.0, orbit_cy)
         self._draw_logo(painter, center)
         self._draw_orbit(painter, center)
-        self._draw_texts(painter)
+        self._draw_texts(painter, title_y, subtitle_y)
         painter.end()
 
     def _draw_logo(self, painter: QPainter, center: QPointF) -> None:
@@ -105,9 +140,7 @@ class SplashScreen(QSplashScreen):
         painter.save()
         painter.translate(center)
         painter.rotate(1.5 * math.sin(self._pulse / 2.0))
-        painter.scale(size / 256.0, size / 256.0)
-        painter.translate(-128.0, -128.0)
-        self._renderer.render(painter)
+        self._renderer.render(painter, QRectF(-size / 2.0, -size / 2.0, size, size))
         painter.restore()
 
     def _draw_orbit(self, painter: QPainter, center: QPointF) -> None:
@@ -136,14 +169,14 @@ class SplashScreen(QSplashScreen):
             start = -(self._angle + i * TRAIL_STEP_DEG)
             painter.drawArc(x, y, rect_size, rect_size, int(start * 16), -span)
 
-    def _draw_texts(self, painter: QPainter) -> None:
+    def _draw_texts(self, painter: QPainter, title_y: float, subtitle_y: float) -> None:
         title = QFont()
         title.setBold(True)
         title.setPixelSize(24)
         painter.setFont(title)
         painter.setPen(TEXT_BRIGHT)
         painter.drawText(
-            0, 232, WIDTH, 28,
+            0, int(title_y), WIDTH, TITLE_H,
             Qt.AlignmentFlag.AlignHCenter, "VoltForge",
         )
 
@@ -154,7 +187,7 @@ class SplashScreen(QSplashScreen):
         painter.setFont(body)
         painter.setPen(TEXT_DIM)
         painter.drawText(
-            0, 260, WIDTH, 18,
+            0, int(subtitle_y), WIDTH, SUBTITLE_H,
             Qt.AlignmentFlag.AlignHCenter, f"Chargement{dots}",
         )
 
