@@ -3,8 +3,8 @@
 Exécution :  ``python -m core``
 
 Vérifie la topologie (nœuds, jonctions, masses), le solveur MNA (régimes
-permanent et transitoire, diodes/LED, moteur, fusible, instruments) et le
-parseur de scénarios. Aucun prérequis graphique.
+permanent et transitoire, diodes/LED, moteur, fusible, instruments) et les
+sessions de simulation interactives. Aucun prérequis graphique.
 """
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ from .components import (
     reset_labels,
 )
 from .formatting import parse_time, parse_value, si_format
-from .scenario import parse_scenario
 from .simulation import SimulationEngine
 from .solver import Solution, Solver
 
@@ -400,95 +399,90 @@ def test_states() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Scénarios
+# Sessions de lecture
 # ---------------------------------------------------------------------------
 
-def test_scenario() -> None:
-    section("Scénarios — analyse & exécution")
+def test_play_session() -> None:
+    section("Sessions de lecture — temps réel, interactions, bouclage")
     reset_labels()
 
-    text = """
-# Scénario de démonstration
-loop 0s 4s
-fps 20
-
-t=0: G1.voltage = 0 ; K1.closed = false
-+1s: G1.voltage = 12V
-+500ms: K1.closed = true
-t=3.0 : G1.voltage = 6
-"""
-    prog, errors = parse_scenario(text)
-    check("scénario : aucune erreur", len(errors), 0)
-    check("scénario : plage loop", prog.loop, (0.0, 4.0))
-    check("scénario : fps", prog.fps, 20.0)
-    check("scénario : 5 événements (2 sur la 1re ligne)", len(prog.events), 5)
-    check("scénario : temps absolus/relatifs",
-          [round(e.time, 3) for e in prog.events], [0.0, 0.0, 1.0, 1.5, 3.0])
-    check("scénario : booléen littéral", prog.events[1].value, False)
-    check("scénario : nombre + unité", prog.events[2].value, 12.0)
-    check("scénario : alias 'K1.closed' -> 'closed'", prog.events[3].prop, "closed")
-    check("scénario : durée = plage loop", prog.duration, 4.0)
-    check("scénario : nombre d'images", prog.frame_count, 80)
-
-    bad = "t=0: G1.voltage = 5\nfps abc\nt=x: R1.resistance=10\nR1.truc = 3"
-    prog2, errors2 = parse_scenario(bad)
-    check("scénario : erreurs détectées (3)", len(errors2) >= 3, True)
-    check("scénario : lignes valides conservées", len(prog2.events), 1)
-
-    # Exécution : le générateur change de valeur en cours de route
+    # Charge RC pilotée par la session (durée finie, sans boucle)
     c = Circuit()
-    g, (r,) = build_series(c, voltage=0.0, devices=[
-        (Kind.RESISTOR, {"resistance": 100.0, "p_max": 100.0}, 0)])
-    engine = SimulationEngine(c)
-    engine.load_program("t=0: G1.voltage=5\nt=1: G1.voltage=10")
-    sol = engine.begin_transient()
-    check("exécution : U initiale = 5 V", sol.branch(r.label).u, 5.0, 1e-3)
-    sol = engine.advance(1.5)
-    check("exécution : U finale = 10 V", sol.branch(r.label).u, 10.0, 1e-3)
-    check("exécution : I = 0,1 A", sol.branch(r.label).i, 0.1, 1e-3)
-    engine.end_transient(restore=True)
-    check("exécution : valeurs restaurées", g.voltage, 0.0, 1e-12)
-
-    # Durée sans loop, cibles de type « dt1 » intactes
-    prog3, errors3 = parse_scenario(
-        "t=2: C1.v0=3\nt=5: C1.v0=6\nt=1: dt1.resistance=50")
-    check("scénario : durée sans loop, aucune erreur", len(errors3), 0)
-    check("scénario : durée = fin − début (marge incluse)", prog3.duration, 4.5)
-    check("scénario : « dt1 » n'est pas avalé par les directives",
-          [(e.time, e.target) for e in prog3.events],
-          [(1.0, "dt1"), (2.0, "C1"), (5.0, "C1")])
-
-    # Réinjection de v0, renommage en vol, rejeu déterministe
-    c3 = Circuit()
-    g3, (r3, cap3) = build_series(c3, voltage=12.0, ri=0.01, devices=[
+    _, (r, cap) = build_series(c, voltage=12.0, devices=[
         (Kind.RESISTOR, {"resistance": 100.0, "p_max": 50.0}, 0),
         (Kind.CAPACITOR, {"capacitance": 1e-3, "v0": 0.0}, 0)])
-    original_label, original_r = r3.label, r3.resistance
+    engine = SimulationEngine(c)
+    engine.start_play(duration=0.4, loop=False)
+    check("session : lecture en cours", engine.playing, True)
+    samples = [engine.solution.branch(cap.label).u]
+    while engine.playing:
+        engine.advance(0.02)
+        samples.append(engine.solution.branch(cap.label).u)
+    check("session : durée épuisée -> arrêt", engine.playing, False)
+    check("session : charge monotone",
+          all(b >= a - 1e-9 for a, b in zip(samples, samples[1:])), True)
+    expected = 12.0 * (1.0 - math.exp(-0.4 / (100.0 * 1e-3)))
+    check("session : U(C) finale ≈ modèle analytique",
+          samples[-1], expected, 0.3)
+    check("session : horloge conservée à l'arrêt", engine.t, 0.4, 1e-6)
+
+    # Bouclage : la session repart de t = 0 sans s'arrêter
+    engine.start_play(duration=0.1, loop=True)
+    engine.advance(0.25)
+    check("bouclage : toujours en lecture", engine.playing, True)
+    check("bouclage : horloge repliée après deux tours", engine.t, 0.05, 1e-6)
+
+    # Pause / reprise
+    engine.pause_play()
+    engine.advance(0.5)
+    check("pause : l'horloge ne bouge pas", engine.t, 0.05, 1e-12)
+    engine.resume_play()
+    engine.advance(0.02)
+    check("reprise : l'horloge reprend", engine.t, 0.07, 1e-6)
+    engine.stop_play()
+    check("arrêt explicite : horloge remise à zéro", engine.t, 0.0, 1e-12)
+
+    # Interaction pendant la lecture : bascule d'un interrupteur
+    c2 = Circuit()
+    g2, (k2, r2) = build_series(c2, voltage=12.0, devices=[
+        (Kind.SWITCH, {"closed": False, "p_max": 50.0}, 0),
+        (Kind.RESISTOR, {"resistance": 100.0, "p_max": 50.0}, 0)])
+    engine2 = SimulationEngine(c2)
+    engine2.start_play(duration=5.0)
+    engine2.advance(0.5)
+    check("interaction : circuit ouvert avant",
+          abs(engine2.solution.branch(r2.label).i) < 1e-3, True)
+    k2.set_prop("closed", True)
+    engine2.recompute()
+    check("interaction : courant immédiat après bascule",
+          engine2.solution.branch(r2.label).i, 0.12, 1e-3)
+    check("interaction : session préservée", engine2.playing, True)
+    check("interaction : recompute n'avance pas l'horloge",
+          engine2.t, 0.5, 1e-12)
+
+    # Réglage fait en cours de lecture : conservé après l'arrêt
+    g2.set_prop("voltage", 24.0)
+    engine2.recompute()
+    engine2.stop_play()
+    check("arrêt : session terminée", engine2.playing, False)
+    check("arrêt : tension modifiée conservée", g2.voltage, 24.0, 1e-12)
+    check("arrêt : solution DC à jour",
+          engine2.solution.branch(r2.label).i, 0.24, 1e-3)
+
+    # Surcharge pendant la lecture : le composant reste grillé
+    c3 = Circuit()
+    g3, (r3,) = build_series(c3, voltage=9.0, devices=[
+        (Kind.RESISTOR, {"resistance": 10.0, "p_max": 1.0}, 0)])
     engine3 = SimulationEngine(c3)
-    engine3.load_program(
-        f"loop 0s 0.4s\ndt 20ms\nt=0: {cap3.label}.v0=5V\n"
-        f"t=0.1: {original_label}.label=RX\nt=0.2: RX.resistance=200")
-    check("v0 : aucun scénario invalide", engine3.program_errors, [])
-    engine3.begin_transient()
-    check("v0 réinjecté : U(C) > 5 V au premier pas",
-          engine3.solution.branch(cap3.label).u > 5.0, True)
-    engine3.advance(0.4)
-    check("lecture terminée", engine3.finished, True)
-    check("renommage : aucun événement perdu", engine3.missing_targets, [])
-    check("renommage : propriété appliquée sous le nouveau nom",
-          r3.resistance, 200.0, 1e-12)
-    check("fin de lecture : snapshot conservé", engine3.snapshot_pending, True)
-    engine3.begin_transient()
-    check("rejeu : nom d'origine restauré", r3.label, original_label)
-    check("rejeu : résistance d'origine restaurée",
-          r3.resistance, original_r, 1e-12)
-    check("rejeu : événement v0 rejoué depuis l'état d'origine",
-          cap3.get_prop("v0"), 5.0, 1e-12)
-    engine3.advance(0.4)
-    engine3.end_transient(restore=True)
-    check("après restauration : v0 d'origine", cap3.get_prop("v0"), 0.0, 1e-12)
-    check("après restauration : snapshot libéré",
-          engine3.snapshot_pending, False)
+    engine3.start_play(duration=0.1, loop=False)
+    g3.set_prop("voltage", 220.0)
+    engine3.recompute()
+    check("surcharge : grillé pendant la lecture", r3.get_prop("blown"), True)
+    engine3.advance(0.1)
+    engine3.stop_play()
+    check("surcharge : toujours grillé après l'arrêt",
+          r3.get_prop("blown"), True)
+    check("surcharge : tension élevée conservée", g3.voltage, 220.0, 1e-12)
 
 
 def test_formatting() -> None:
@@ -520,7 +514,7 @@ def main() -> int:
         test_transient,
         test_machines_instruments,
         test_states,
-        test_scenario,
+        test_play_session,
         test_formatting,
     ]
     for t in tests:

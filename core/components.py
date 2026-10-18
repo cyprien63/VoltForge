@@ -167,8 +167,8 @@ class Prop:
             if isinstance(value, bool):
                 return value
             if isinstance(value, (int, float)):
-                # Le parseur de scénarios convertit « 1 »/« 0 » en nombres
-                # (voir la documentation du DSL) : on les accepte ici.
+                # Les champs numériques peuvent envoyer « 1 »/« 0 » :
+                # on les accepte comme des booléens.
                 if float(value) == 1.0:
                     return True
                 if float(value) == 0.0:
@@ -1028,7 +1028,7 @@ class Fuse(Component):
     """Fusible : se déclenche (et devient ouvert) si |I| > ``i_rated``.
 
     Réarmement : cocher/décocher la propriété ``blown`` (= « grillé »)
-    dans le panneau propriétés ou via un scénario.
+    dans le panneau de propriétés.
     """
 
     kind = Kind.FUSE

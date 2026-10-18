@@ -56,7 +56,6 @@ exports/
 !docs/**/*.gif
 *.vfproj.json.bak
 *.vfproj.json
-*.scenario.txt
 *.log
 
 # --- Résumé auto-update (lu par la CI, jamais committé) ---

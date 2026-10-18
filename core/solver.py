@@ -5,8 +5,8 @@ Implémente l'**Analyse Nodale Modifiée** (*Modified Nodal Analysis*) :
 * Régime permanent (DC) : condensateurs en circuit ouvert, bobines en
   court-circuit, résolution du système linéaire ``A·x = b`` (NumPy).
 * Régime transitoire : modèles compagnons implicites (Euler implicite)
-  pour C et L -> simulation dynamique (charge RC, LR…) et exécution des
-  scénarios séquentiels / export GIF.
+  pour C et L -> simulation dynamique (charge RC, LR…), sessions de
+  lecture en temps réel et export GIF.
 * Composants non linéaires (diode, LED) : modèle linéaire par morceaux
   (seuil ``vf`` + ``r_on``/``r_off``) convergé par itérations.
 * Protections : fusibles et composants dépassant leurs limites de tension ou
