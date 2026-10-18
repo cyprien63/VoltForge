@@ -166,11 +166,19 @@ class Prop:
         if self.ptype == "bool":
             if isinstance(value, bool):
                 return value
+            if isinstance(value, (int, float)):
+                # Le parseur de scénarios convertit « 1 »/« 0 » en nombres
+                # (voir la documentation du DSL) : on les accepte ici.
+                if float(value) == 1.0:
+                    return True
+                if float(value) == 0.0:
+                    return False
+                raise ValueError(f"booléen attendu, reçu {value!r}")
             s = str(value).strip().lower()
-            if s in ("1", "true", "vrai", "yes", "on", "closed",
+            if s in ("1", "1.0", "true", "vrai", "yes", "on", "closed",
                      "fermé", "ferme", "fermée", "grillé", "grille"):
                 return True
-            if s in ("0", "false", "faux", "no", "off", "open",
+            if s in ("0", "0.0", "false", "faux", "no", "off", "open",
                      "ouvert", "intact", "ok"):
                 return False
             raise ValueError(f"booléen attendu, reçu {value!r}")
