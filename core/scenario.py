@@ -19,7 +19,9 @@ DSL simple, en ligne, pour piloter la simulation dans le temps :
 * Commentaires : lignes débutant par ``#``.
 * Propriétés : ``voltage``, ``current``, ``ri``, ``resistance``,
   ``closed``, ``r_on``, ``r_off``, ``capacitance``, ``v0``,
-  ``inductance``, ``r_w``, ``p_max``, ``label``, ``blown``…
+  ``inductance``, ``r_w``, ``p_max``, ``u_max``, ``label``, ``blown``,
+  ``level``, ``temperature``, ``illumination``, ``vf``, ``i_rated``,
+  ``r_sh``, ``r_int``, ``i_test``, ``r_m``, ``ke``, ``kt``, ``tc``, ``b``…
 * Valeurs booléennes : ``true/false``, ``vrai/faux``, ``on/off``,
   ``open/closed``, ``ouvert/fermé``, ``1/0``.
 * La propriété ``label`` accepte un texte libre (renommage en cours
@@ -42,7 +44,7 @@ from .formatting import parse_time, parse_value
 PROP_ALIASES: Dict[str, str] = {
     "voltage": "voltage", "v": "voltage", "u": "voltage", "emf": "voltage",
     "tension": "voltage", "courant": "current", "current": "current",
-    "i": "current", "ri": "ri", "r_int": "ri",
+    "i": "current", "ri": "ri", "r_int": "ri", "r_interne": "ri",
     "resistance": "resistance", "r": "resistance",
     "closed": "closed", "state": "closed", "etat": "closed",
     "switch": "closed", "r_on": "r_on", "ron": "r_on",
@@ -52,6 +54,27 @@ PROP_ALIASES: Dict[str, str] = {
     "r_w": "r_w", "rw": "r_w", "p_max": "p_max", "pmax": "p_max",
     "label": "label", "name": "label",
     "blown": "blown", "grille": "blown", "grillé": "blown",
+    # Composants réglables (thermistance, photorésistance, lampe, moteur…)
+    "level": "level", "niveau": "level", "curseur": "level",
+    "temperature": "temperature", "température": "temperature",
+    "temp": "temperature", "beta": "beta",
+    "r_ref": "r_ref", "rref": "r_ref",
+    "dark_resistance": "dark_resistance", "r_dark": "dark_resistance",
+    "illumination": "illumination", "eclairement": "illumination",
+    "éclairement": "illumination", "lux": "illumination",
+    "sensitivity": "sensitivity", "sensibilite": "sensitivity",
+    "sensibilité": "sensitivity",
+    "u_rated": "u_rated", "urated": "u_rated",
+    "vf": "vf", "seuil": "vf", "v_seuil": "vf",
+    # Protection et instruments
+    "i_rated": "i_rated", "irated": "i_rated", "i_nom": "i_rated",
+    "calibre": "i_rated", "r_closed": "r_closed", "rclosed": "r_closed",
+    "u_max": "u_max", "umax": "u_max", "tension_max": "u_max",
+    "r_sh": "r_sh", "rsh": "r_sh", "shunt": "r_sh",
+    "i_test": "i_test", "itest": "i_test",
+    # Moteur continu
+    "r_m": "r_m", "rm": "r_m", "ke": "ke", "kt": "kt", "tc": "tc",
+    "b": "b", "frottement": "b",
 }
 
 _EVENT_RE = re.compile(
@@ -73,6 +96,7 @@ class ScenarioEvent:
     value: Any             # valeur déjà convertie
     raw: str = ""          # texte source (affichage d'erreur)
     line: int = 0
+    raw_prop: str = ""     # propriété telle qu'écrite (repli sur le composant)
 
     def describe(self) -> str:
         v = self.value
@@ -152,27 +176,44 @@ class ScenarioProgram:
                     errors.append(msg)
             else:
                 try:
-                    comp.set_prop(ev.prop, ev.value)
+                    name = _event_prop_name(comp, ev)
+                    comp.set_prop(name, ev.value)
                 except (ValueError, KeyError, TypeError, AttributeError) as exc:
                     msg = f"{ev.target}.{ev.prop}: {exc}"
                     if errors is not None and msg not in errors:
                         errors.append(msg)
                 else:
-                    self._sync_transient_state(comp, ev)
+                    self._sync_transient_state(comp, ev, name)
             cursor += 1
         return cursor
 
     @staticmethod
-    def _sync_transient_state(comp: Any, ev: ScenarioEvent) -> None:
+    def _sync_transient_state(comp: Any, ev: ScenarioEvent,
+                              name: str = "") -> None:
         """Réinjecte dans l'état transitoire une propriété qui le pilote.
 
         Sans cela, « t=0: C1.v0=5 » modifiait la propriété mais le
         condensateur continuait à se charger depuis sa valeur d'origine.
         """
-        if ev.prop == "v0":
+        if (name or ev.prop) == "v0":
             state = getattr(comp, "tstate", None)
             if isinstance(state, dict):
                 state["v"] = comp.get_prop("v0")
+
+
+def _event_prop_name(comp: Any, ev: ScenarioEvent) -> str:
+    """Nom de propriété réellement appliqué sur ``comp``.
+
+    Les alias sont globaux ; une propriété écrite telle quelle (ex.
+    ``V1.r_int``) mais absente des alias pour ce composant précis est
+    utilisée directement quand le composant la déclare.
+    """
+    specs = getattr(comp, "PROPS", None) or {}
+    if ev.prop in specs:
+        return ev.prop
+    if ev.raw_prop and ev.raw_prop in specs:
+        return ev.raw_prop
+    return ev.prop
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +354,7 @@ def parse_scenario(text: str) -> Tuple[ScenarioProgram, List[ScenarioError]]:
                     continue
             program.events.append(ScenarioEvent(
                 time=base_time, target=target.strip(), prop=prop,
-                value=value, raw=action, line=lineno,
+                value=value, raw=action, line=lineno, raw_prop=prop_key,
             ))
 
     program.events.sort(key=lambda e: e.time)
