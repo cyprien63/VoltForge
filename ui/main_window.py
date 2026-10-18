@@ -31,7 +31,6 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressDialog,
     QPushButton,
-    QPlainTextEdit,
     QSpinBox,
     QScrollArea,
     QSlider,
@@ -73,7 +72,6 @@ from exporters.static import export_static
 from ui.canvas import CircuitCanvas
 from core.formatting import parse_value
 from core.voltage_arrow import VoltageArrow
-from core.scenario import PROP_ALIASES
 
 
 class PropertyDialog(QDialog):
@@ -478,10 +476,10 @@ class MainWindow(QMainWindow):
         self.circuit = Circuit()
         self.engine = SimulationEngine(self.circuit)
         self.project_path: Path | None = None
-        self.scenario_text = ""
         self.is_dirty = False
         self.history = History()
         self._restoring_history = False
+        self._gif_recording = False
         self.theme = QSettings("VoltForge", "VoltForge").value("theme", "dark")
         self._play_timer = QTimer(self)
         self._play_timer.setInterval(20)
@@ -494,14 +492,9 @@ class MainWindow(QMainWindow):
         self.refresh_inspector()
         self.refresh_results()
         self._reset_history()
+        self._refresh_playback_ui()
         self.statusBar().showMessage("Prêt — choisissez un outil et cliquez sur la grille.")
         self._refresh_title()
-
-    def _scenario_text_changed(self, text: str) -> None:
-        if text != self.scenario_text:
-            self.scenario_text = text
-            self.is_dirty = True
-            self._refresh_title()
 
     def _create_menu(self) -> None:
         file_menu = self.menuBar().addMenu("Fichier")
@@ -541,8 +534,17 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(self.redo_action)
 
         simulation_menu = self.menuBar().addMenu("Simulation")
-        self._add_action(simulation_menu, "Configurer / lancer…", self.open_scenario_dialog)
-        self._add_action(simulation_menu, "Exporter un GIF…", self.open_scenario_dialog)
+        self.play_action = QAction("Lecture", self)
+        self.play_action.setCheckable(True)
+        self.play_action.triggered.connect(self.toggle_playback)
+        simulation_menu.addAction(self.play_action)
+        self.stop_action = QAction("Arrêt", self)
+        self.stop_action.triggered.connect(self.stop_playback)
+        simulation_menu.addAction(self.stop_action)
+        self._add_action(
+            simulation_menu, "Enregistrer une animation GIF…",
+            self.open_gif_dialog,
+        )
         self._add_action(simulation_menu, "Recalculer", self.recompute)
         tools_menu = self.menuBar().addMenu("Outils")
         self._add_action(tools_menu, "Calculateur loi d'Ohm…", self.open_ohm_calculator)
@@ -788,8 +790,33 @@ class MainWindow(QMainWindow):
         simulation_toolbar = self.addToolBar("Simulation")
         simulation_toolbar.setMovable(False)
         simulation_toolbar.setObjectName("simToolbar")
+        simulation_toolbar.addAction(self.play_action)
+        simulation_toolbar.addAction(self.stop_action)
+        simulation_toolbar.addSeparator()
+        self.sim_duration = QDoubleSpinBox()
+        self.sim_duration.setRange(0.0, 600.0)
+        self.sim_duration.setDecimals(1)
+        self.sim_duration.setSingleStep(0.5)
+        self.sim_duration.setSuffix(" s")
+        self.sim_duration.setSpecialValueText("illimitée")
+        self.sim_duration.setValue(0.0)
+        self.sim_duration.setToolTip(
+            "Durée d'une session de lecture (« illimitée » = jusqu'à l'arrêt)."
+        )
+        simulation_toolbar.addWidget(self.sim_duration)
+        self.sim_loop = QCheckBox("Boucler")
+        self.sim_loop.setChecked(True)
+        self.sim_loop.setToolTip(
+            "Repartir de t = 0 à la fin de chaque session (à la manière "
+            "du drapeau vert de Scratch)."
+        )
+        simulation_toolbar.addWidget(self.sim_loop)
+        self.sim_time_label = QLabel("t = 0,00 s")
+        self.sim_time_label.setObjectName("simTimeLabel")
+        simulation_toolbar.addWidget(self.sim_time_label)
+        simulation_toolbar.addSeparator()
         self._toolbar_action(
-            simulation_toolbar, "Simulation…", self.open_scenario_dialog
+            simulation_toolbar, "Enregistrer GIF…", self.open_gif_dialog
         )
         self._toolbar_action(
             simulation_toolbar, "Calculateur U/I/R/P", self.open_ohm_calculator
@@ -1027,7 +1054,7 @@ class MainWindow(QMainWindow):
         self._update_history_actions()
 
     def undo(self) -> None:
-        if self._play_timer.isActive():
+        if self._play_timer.isActive() or self.engine.playing:
             return
         state = self.history.undo()
         if state is None:
@@ -1035,7 +1062,7 @@ class MainWindow(QMainWindow):
         self._apply_history_state(state)
 
     def redo(self) -> None:
-        if self._play_timer.isActive():
+        if self._play_timer.isActive() or self.engine.playing:
             return
         state = self.history.redo()
         if state is None:
@@ -1456,19 +1483,22 @@ class MainWindow(QMainWindow):
     def new_project(self) -> None:
         if not self._confirm_unsaved_changes():
             return
+        self._play_timer.stop()
+        if self.engine.playing:
+            self.engine.stop_play()
         self.circuit = Circuit()
         self.engine = SimulationEngine(self.circuit)
         self.canvas.circuit = self.circuit
         self.canvas.engine = self.engine
         self.canvas.set_selections([])
         self.project_path = None
-        self.scenario_text = ""
         self.is_dirty = False
         self.engine.recompute()
         self._circuit_changed()
         self.is_dirty = False
         self._reset_history()
         self._refresh_title()
+        self._refresh_playback_ui()
 
     def open_project(self) -> None:
         if not self._confirm_unsaved_changes():
@@ -1487,6 +1517,9 @@ class MainWindow(QMainWindow):
                     data = json.loads(archive.read("circuit.vfdata").decode("utf-8"))
             else:
                 data = json.loads(path.read_text(encoding="utf-8"))
+            self._play_timer.stop()
+            if self.engine.playing:
+                self.engine.stop_play()
             circuit = Circuit.from_dict(data)
             self.circuit = circuit
             self.engine = SimulationEngine(circuit)
@@ -1494,12 +1527,12 @@ class MainWindow(QMainWindow):
             self.canvas.engine = self.engine
             self.canvas.set_selection(None)
             self.project_path = path
-            self.scenario_text = data.get("scenario", "")
             self.engine.recompute()
             self._circuit_changed()
             self.is_dirty = False
             self._reset_history()
             self._refresh_title()
+            self._refresh_playback_ui()
         except (
             OSError, ValueError, KeyError, TypeError, UnicodeDecodeError,
             zipfile.BadZipFile,
@@ -1530,7 +1563,7 @@ class MainWindow(QMainWindow):
     def _write_project(self, path: Path) -> bool:
         try:
             data = json.dumps(
-                self.circuit.to_dict(self.scenario_text),
+                self.circuit.to_dict(),
                 ensure_ascii=False,
                 separators=(",", ":"),
             ).encode("utf-8")
@@ -1584,398 +1617,163 @@ class MainWindow(QMainWindow):
         except (OSError, ValueError, RuntimeError) as exc:
             QMessageBox.critical(self, "Export impossible", str(exc))
 
-    def open_scenario_dialog(self) -> None:
+    def _format_sim_time(self) -> str:
+        """Horloge de la barre de Simulation, avec virgule décimale."""
+        return f"t = {self.engine.t:.2f} s".replace(".", ",")
+
+    def toggle_playback(self) -> None:
+        """Démarre une session, ou bascule pause / reprise."""
+        if self._gif_recording:
+            return
+        if self.engine.playing:
+            if self.engine.paused:
+                self.engine.resume_play()
+                self._play_timer.start()
+            else:
+                self.engine.pause_play()
+                self._play_timer.stop()
+        else:
+            self.engine.start_play(
+                duration=self.sim_duration.value(),
+                loop=self.sim_loop.isChecked(),
+            )
+            self._play_timer.start()
+            self.statusBar().showMessage(
+                "Lecture en cours — basculez un interrupteur ou réglez un "
+                "curseur pour interagir."
+            )
+        self._refresh_playback_ui()
+
+    def stop_playback(self) -> None:
+        """Termine la session et repasse en régime permanent (DC)."""
+        if self._gif_recording:
+            return
+        self._play_timer.stop()
+        if self.engine.playing:
+            self.engine.stop_play()
+        self.sim_time_label.setText("t = 0,00 s")
+        self._refresh_playback_ui()
+        self.canvas.update()
+        self.refresh_results()
+
+    def _refresh_playback_ui(self) -> None:
+        """Synchronise les commandes de Simulation avec l'état du moteur."""
+        if not self.engine.playing:
+            text, checked = "Lecture", False
+        elif self.engine.paused:
+            text, checked = "Reprendre", False
+        else:
+            text, checked = "Pause", True
+        self.play_action.setText(text)
+        self.play_action.setChecked(checked)
+        self.stop_action.setEnabled(self.engine.playing)
+        self.sim_time_label.setText(self._format_sim_time())
+
+    def _advance_playback(self) -> None:
+        self.engine.advance(0.02)
+        self.sim_time_label.setText(self._format_sim_time())
+        self.canvas.update()
+        self.refresh_results()
+        if not self.engine.playing:
+            # Session à durée finie terminée : la frame finale reste affichée.
+            self._play_timer.stop()
+            self.statusBar().showMessage("Session terminée.", 3000)
+            self._refresh_playback_ui()
+
+    def open_gif_dialog(self) -> None:
+        """Durée + cadence, puis enregistre la session en GIF."""
+        if not self.circuit.components:
+            QMessageBox.information(
+                self, "Aucun composant",
+                "Placez un composant avant d'enregistrer une animation.",
+            )
+            return
         dialog = QDialog(self)
-        dialog.setWindowTitle("Simulation pas à pas")
-        dialog.resize(780, 520)
+        dialog.setWindowTitle("Enregistrer une animation")
         layout = QVBoxLayout(dialog)
         info = QLabel(
-            "Réglez les paramètres, puis ajoutez les changements souhaités. "
-            "Aucun code de scénario à saisir."
+            "Le GIF enregistre une session de lecture en direct. Pendant "
+            "l'enregistrement, vous pouvez basculer les interrupteurs et "
+            "régler les curseurs : vos gestes sont capturés dans le GIF."
         )
         info.setWordWrap(True)
         layout.addWidget(info)
-
-        settings = QFormLayout()
+        form = QFormLayout()
         duration = QDoubleSpinBox()
-        duration.setRange(0.1, 600)
+        duration.setRange(0.1, 600.0)
         duration.setDecimals(2)
-        duration.setValue(3)
+        duration.setValue(3.0)
         duration.setSuffix(" s")
         fps = QSpinBox()
         fps.setRange(1, 60)
         fps.setValue(15)
-        step = QDoubleSpinBox()
-        step.setRange(0.1, 1000)
-        step.setDecimals(1)
-        step.setValue(5)
-        step.setSuffix(" ms")
-        settings.addRow("Durée", duration)
-        settings.addRow("Images par seconde", fps)
-        settings.addRow("Pas de calcul", step)
-        layout.addLayout(settings)
-
-        table = QTableWidget(0, 4)
-        table.setHorizontalHeaderLabels(
-            ["Temps (s)", "Composant", "Paramètre", "Nouvelle valeur"]
+        form.addRow("Durée", duration)
+        form.addRow("Images par seconde", fps)
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
         )
-        table.horizontalHeader().setStretchLastSection(True)
-        table.setMinimumHeight(220)
-        layout.addWidget(table, 1)
-        row_buttons = QHBoxLayout()
-        add_button = QPushButton("Ajouter un changement")
-        remove_button = QPushButton("Retirer la ligne")
-        row_buttons.addWidget(add_button)
-        row_buttons.addWidget(remove_button)
-        row_buttons.addStretch(1)
-        layout.addLayout(row_buttons)
-
-        supported_properties = set(PROP_ALIASES.values())
-        property_labels = {
-            "voltage": "Tension",
-            "current": "Courant",
-            "ri": "Résistance interne",
-            "resistance": "Résistance",
-            "closed": "Interrupteur fermé",
-            "r_on": "Résistance (fermé)",
-            "r_off": "Résistance (ouvert)",
-            "capacitance": "Capacité",
-            "v0": "Tension initiale",
-            "inductance": "Inductance",
-            "r_w": "Résistance de bobine",
-            "p_max": "Puissance maximale",
-        }
-
-        def add_event_row() -> None:
-            if not self.circuit.components:
-                QMessageBox.information(
-                    dialog, "Aucun composant",
-                    "Placez un composant avant de configurer un événement.",
-                )
-                return
-            row = table.rowCount()
-            table.insertRow(row)
-            time_editor = QDoubleSpinBox()
-            time_editor.setRange(0, 600)
-            time_editor.setDecimals(3)
-            time_editor.setSingleStep(0.1)
-            time_editor.setValue(min(0.5, duration.value()))
-            table.setCellWidget(row, 0, time_editor)
-            target_editor = QComboBox()
-            target_editor.addItems(
-                [component.label for component in self.circuit.components]
-            )
-            table.setCellWidget(row, 1, target_editor)
-            property_editor = QComboBox()
-            table.setCellWidget(row, 2, property_editor)
-            value_editor = QLineEdit()
-            table.setCellWidget(row, 3, value_editor)
-
-            def update_value() -> None:
-                component = self.circuit.get(target_editor.currentText())
-                prop = property_editor.currentData()
-                if component is None or not prop:
-                    current = table.cellWidget(row, 3)
-                    if isinstance(current, QLineEdit):
-                        current.clear()
-                    return
-                value = component.get_prop(prop)
-                spec = component.prop_specs()[prop]
-                current = table.cellWidget(row, 3)
-                if spec.ptype == "bool":
-                    if not isinstance(current, QComboBox):
-                        current = QComboBox()
-                        current.addItem("Fermé / activé", "true")
-                        current.addItem("Ouvert / désactivé", "false")
-                        table.setCellWidget(row, 3, current)
-                    current.setCurrentIndex(
-                        current.findData(str(bool(value)).lower())
-                    )
-                else:
-                    if not isinstance(current, QLineEdit):
-                        current = QLineEdit()
-                        table.setCellWidget(row, 3, current)
-                    current.setText(str(value))
-                    current.setPlaceholderText(
-                        f"Valeur en {spec.unit}" if spec.unit else "Nouvelle valeur"
-                    )
-
-            def update_properties() -> None:
-                component = self.circuit.get(target_editor.currentText())
-                property_editor.clear()
-                if component is None:
-                    return
-                names = [
-                    name for name, spec in component.prop_specs().items()
-                    if name in supported_properties and spec.ptype in ("float", "bool")
-                ]
-                for name in names:
-                    property_editor.addItem(property_labels.get(name, name), name)
-                update_value()
-
-            target_editor.currentTextChanged.connect(update_properties)
-            property_editor.currentTextChanged.connect(update_value)
-            update_properties()
-
-        def build_scenario() -> str:
-            lines = [
-                f"loop 0s {duration.value():g}s",
-                f"fps {fps.value()}",
-                f"dt {step.value():g}ms",
-            ]
-            for row in range(table.rowCount()):
-                time_editor = table.cellWidget(row, 0)
-                target_editor = table.cellWidget(row, 1)
-                property_editor = table.cellWidget(row, 2)
-                value_editor = table.cellWidget(row, 3)
-                if time_editor.value() > duration.value():
-                    raise ValueError(
-                        f"Le temps de la ligne {row + 1} dépasse la durée choisie."
-                    )
-                prop = property_editor.currentData()
-                if not target_editor.currentText() or not prop:
-                    raise ValueError(f"Complétez les paramètres de la ligne {row + 1}.")
-                value = (
-                    str(value_editor.currentData())
-                    if isinstance(value_editor, QComboBox)
-                    else value_editor.text().strip()
-                )
-                if not value:
-                    raise ValueError(f"Indiquez une valeur à la ligne {row + 1}.")
-                lines.append(
-                    f"t={time_editor.value():g}s: "
-                    f"{target_editor.currentText()}.{prop}={value}"
-                )
-            scenario_text = "\n".join(lines)
-            self.engine.load_program(scenario_text)
-            if self.engine.program_errors:
-                raise ValueError("\n".join(self.engine.program_errors))
-            self._scenario_text_changed(scenario_text)
-            return scenario_text
-
-        add_button.clicked.connect(add_event_row)
-        remove_button.clicked.connect(
-            lambda: table.removeRow(table.currentRow())
-            if table.currentRow() >= 0 else None
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Enregistrer")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Exporter l'animation", "simulation.gif", "GIF animé (*.gif)"
         )
-        if self.circuit.components:
-            add_event_row()
+        if not filename:
+            return
+        if not filename.lower().endswith(".gif"):
+            filename += ".gif"
+        self._export_gif(filename, duration.value(), fps.value())
 
-        buttons = QHBoxLayout()
-        play_button = QPushButton("Lancer la simulation")
-        stop_button = QPushButton("Arrêter")
-        gif_button = QPushButton("Exporter en GIF…")
-        close_button = QPushButton("Fermer")
-        for button in (play_button, stop_button, gif_button, close_button):
-            buttons.addWidget(button)
-        layout.addLayout(buttons)
-
-        def start_playback() -> None:
-            try:
-                build_scenario()
-                if self.engine.is_transient:
-                    self.engine.end_transient(restore=True)
-                self.engine.begin_transient(self.engine.program)
-                self.canvas.update()
-                self.refresh_results()
-                self._play_timer.start()
-            except (RuntimeError, ValueError) as exc:
-                QMessageBox.warning(dialog, "Simulation impossible", str(exc))
-
-        def stop_playback() -> None:
-            self._play_timer.stop()
-            if self.engine.is_transient:
-                self.engine.end_transient(restore=True)
-            self.refresh_results()
-
-        def make_gif() -> None:
-            try:
-                build_scenario()
-            except ValueError as exc:
-                QMessageBox.warning(dialog, "Paramètres à vérifier", str(exc))
-                return
-            filename, _ = QFileDialog.getSaveFileName(
-                dialog, "Exporter l'animation", "simulation.gif", "GIF animé (*.gif)"
-            )
-            if not filename:
-                return
-            if not filename.lower().endswith(".gif"):
-                filename += ".gif"
-            progress = QProgressDialog(
-                "Simulation et capture des images…", None, 0,
-                max(1, self.engine.program.frame_count), dialog,
-            )
-            progress.setWindowTitle("Export GIF")
-            progress.setWindowModality(Qt.WindowModality.WindowModal)
-            progress.setMinimumDuration(0)
-            try:
-                count = export_gif(
-                    self.engine, self.canvas, self.scenario_text, filename,
-                    lambda current, total: (
-                        progress.setMaximum(total),
-                        progress.setValue(current),
-                        QApplication_process_events(),
-                    ),
-                )
-                QMessageBox.information(
-                    dialog, "Export terminé",
-                    f"GIF créé avec {count} images :\n{filename}",
-                )
-            except (OSError, ValueError, RuntimeError) as exc:
-                QMessageBox.critical(dialog, "Export impossible", str(exc))
-            finally:
-                progress.close()
-                self.refresh_results()
-
-        play_button.clicked.connect(start_playback)
-        stop_button.clicked.connect(stop_playback)
-        gif_button.clicked.connect(make_gif)
-        close_button.clicked.connect(dialog.accept)
-        dialog.exec()
-
-    def _open_legacy_scenario_dialog(self) -> None:
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Programme de simulation")
-        dialog.resize(760, 560)
-        layout = QVBoxLayout(dialog)
-        editor = QPlainTextEdit()
-        editor.setPlaceholderText(
-            "loop 0s 3s\nfps 15\nt=0s: G1.voltage = 0V\nt=1s: G1.voltage = 12V"
+    def _export_gif(self, filename: str, duration: float, fps: int) -> None:
+        # L'export pilote le moteur lui-même : on coupe le timer de lecture
+        # et on verrouille les commandes de session pendant la capture. Le
+        # dialogue de progression n'est pas modale et traite les événements
+        # Qt : le canevas reste cliquable et les interactions partent dans
+        # le GIF.
+        self._play_timer.stop()
+        self._gif_recording = True
+        self.play_action.setEnabled(False)
+        self.stop_action.setEnabled(False)
+        progress = QProgressDialog(
+            "Simulation et capture des images…", None, 0, 100, self
         )
-        editor.setPlainText(self.scenario_text)
-        layout.addWidget(editor, 1)
-        info = QLabel(
-            "Syntaxe : t=1s: G1.voltage=12V ; K1.closed=true "
-            "— propriétés séparées par des points-virgules."
-        )
-        info.setWordWrap(True)
-        layout.addWidget(info)
-        button_row = QHBoxLayout()
-        load_button = QPushButton("Charger…")
-        save_button = QPushButton("Enregistrer…")
-        play_button = QPushButton("Lancer")
-        stop_button = QPushButton("Arrêter")
-        gif_button = QPushButton("Exporter en GIF…")
-        close_button = QPushButton("Fermer")
-        for button in (load_button, save_button, play_button, stop_button,
-                       gif_button, close_button):
-            button_row.addWidget(button)
-        layout.addLayout(button_row)
-
-        def load_text():
-            filename, _ = QFileDialog.getOpenFileName(
-                dialog, "Charger un scénario", "", "Scénarios texte (*.txt);;Tous les fichiers (*)"
+        progress.setWindowTitle("Export GIF")
+        progress.setWindowModality(Qt.WindowModality.NonModal)
+        progress.setCancelButton(None)
+        progress.setMinimumDuration(0)
+        try:
+            count = export_gif(
+                self.engine, self.canvas, filename, duration, float(fps),
+                lambda current, total: (
+                    progress.setMaximum(total),
+                    progress.setValue(current),
+                    QApplication_process_events(),
+                ),
             )
-            if filename:
-                try:
-                    editor.setPlainText(Path(filename).read_text(encoding="utf-8"))
-                except OSError as exc:
-                    QMessageBox.critical(dialog, "Lecture impossible", str(exc))
-
-        def save_text():
-            filename, _ = QFileDialog.getSaveFileName(
-                dialog, "Enregistrer le scénario", "scenario.txt",
-                "Scénarios texte (*.txt)",
+            QMessageBox.information(
+                self, "Export terminé",
+                f"GIF créé avec {count} images :\n{filename}",
             )
-            if filename:
-                try:
-                    Path(filename).write_text(editor.toPlainText(), encoding="utf-8")
-                except OSError as exc:
-                    QMessageBox.critical(dialog, "Écriture impossible", str(exc))
-
-        def start_playback():
-            self._scenario_text_changed(editor.toPlainText())
-            program = self.engine.load_program(self.scenario_text)
-            if self.engine.program_errors:
-                QMessageBox.warning(
-                    dialog, "Scénario invalide",
-                    "\n".join(self.engine.program_errors),
-                )
-                return
-            if program.duration <= 0:
-                QMessageBox.warning(dialog, "Scénario vide",
-                                    "Ajoutez un événement ou une directive loop.")
-                return
-            try:
-                self.engine.begin_transient(program)
-                self.canvas.update()
-                self.refresh_results()
-                self._play_timer.start()
-            except (RuntimeError, ValueError) as exc:
-                QMessageBox.critical(dialog, "Simulation impossible", str(exc))
-
-        def stop_playback():
-            self._play_timer.stop()
-            if self.engine.is_transient:
-                self.engine.end_transient(restore=True)
-            self.refresh_results()
-
-        def make_gif():
-            self._scenario_text_changed(editor.toPlainText())
-            filename, _ = QFileDialog.getSaveFileName(
-                dialog, "Exporter l'animation", "simulation.gif", "GIF animé (*.gif)"
-            )
-            if not filename:
-                return
-            if not filename.lower().endswith(".gif"):
-                filename += ".gif"
-            self.engine.load_program(self.scenario_text)
-            if self.engine.program_errors:
-                QMessageBox.warning(
-                    dialog, "Scénario invalide",
-                    "\n".join(self.engine.program_errors),
-                )
-                return
-            progress = QProgressDialog(
-                "Simulation et capture des images…", None, 0,
-                max(1, self.engine.program.frame_count), dialog,
-            )
-            progress.setWindowTitle("Export GIF")
-            progress.setWindowModality(Qt.WindowModality.WindowModal)
-            progress.setMinimumDuration(0)
-            try:
-                count = export_gif(
-                    self.engine, self.canvas, self.scenario_text, filename,
-                    lambda current, total: (
-                        progress.setMaximum(total),
-                        progress.setValue(current),
-                        QApplication_process_events(),
-                    ),
-                )
-                QMessageBox.information(
-                    dialog, "Export terminé",
-                    f"GIF créé avec {count} images :\n{filename}",
-                )
-            except (OSError, ValueError, RuntimeError) as exc:
-                QMessageBox.critical(dialog, "Export impossible", str(exc))
-            finally:
-                progress.close()
-                self.refresh_results()
-
-        load_button.clicked.connect(load_text)
-        save_button.clicked.connect(save_text)
-        play_button.clicked.connect(start_playback)
-        stop_button.clicked.connect(stop_playback)
-        gif_button.clicked.connect(make_gif)
-        close_button.clicked.connect(dialog.accept)
-        dialog.finished.connect(
-            lambda: self._scenario_text_changed(editor.toPlainText())
-        )
-        dialog.exec()
-
-    def _advance_playback(self) -> None:
-        self.engine.advance(0.02)
-        self.canvas.update()
-        self.refresh_results()
-        if self.engine.finished:
-            self._play_timer.stop()
-            self.engine.end_transient(restore=False)
+        except (OSError, ValueError, RuntimeError) as exc:
+            QMessageBox.critical(self, "Export impossible", str(exc))
+        finally:
+            progress.close()
+            self._gif_recording = False
+            self.play_action.setEnabled(True)
+            self.stop_action.setEnabled(True)
+            self._refresh_playback_ui()
+            self.canvas.update()
             self.refresh_results()
 
     def closeEvent(self, event) -> None:
-        if self._play_timer.isActive():
-            self._play_timer.stop()
-            self.engine.end_transient(restore=True)
+        self._play_timer.stop()
+        if self.engine.playing:
+            self.engine.stop_play()
         if self._confirm_unsaved_changes():
             event.accept()
         else:

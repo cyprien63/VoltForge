@@ -5,8 +5,8 @@ Implémente l'**Analyse Nodale Modifiée** (*Modified Nodal Analysis*) :
 * Régime permanent (DC) : condensateurs en circuit ouvert, bobines en
   court-circuit, résolution du système linéaire ``A·x = b`` (NumPy).
 * Régime transitoire : modèles compagnons implicites (Euler implicite)
-  pour C et L -> simulation dynamique (charge RC, LR…) et exécution des
-  scénarios séquentiels / export GIF.
+  pour C et L -> simulation dynamique (charge RC, LR…), sessions de
+  lecture en temps réel et export GIF.
 * Composants non linéaires (diode, LED) : modèle linéaire par morceaux
   (seuil ``vf`` + ``r_on``/``r_off``) convergé par itérations.
 * Protections : fusibles et composants dépassant leurs limites de tension ou
@@ -150,6 +150,7 @@ class Solver:
         sol = self._solve_once(dt, t)
         nonlinear = [c for c in self.circuit.components if c.is_branch]
         iterations = 0
+        converged = False
         for iterations in range(1, MAX_ITER + 1):
             changed = False
             for comp in nonlinear:
@@ -181,10 +182,34 @@ class Solver:
                     comp.tstate["on"] = 1
                     changed = True
             if not changed:
+                converged = True
                 break
             sol = self._solve_once(dt, t)
+        if not converged:
+            sol.warnings.append(
+                "Modèles non linéaires non convergés : résultats approximatifs "
+                "(vérifiez les seuils des diodes/LED)."
+            )
         sol.iterations = iterations
+        if dt is not None:
+            self._commit_transient_state(sol)
         return sol
+
+    def _commit_transient_state(self, sol: Solution) -> None:
+        """Valide l'état des modèles compagnons, une seule fois par pas.
+
+        Les ré-itérations des modèles non linéaires ne doivent pas faire
+        avancer plusieurs fois la charge du condensateur ou le courant de
+        la bobine au sein d'un même pas de temps.
+        """
+        for comp in self.circuit.components:
+            res = sol.branches.get(comp.label)
+            if res is None:
+                continue
+            if isinstance(comp, Capacitor):
+                comp.tstate["v"] = res.u
+            elif isinstance(comp, Inductor):
+                comp.tstate["i"] = res.i
 
     # -- résolution linéaire ----------------------------------------------
     def _solve_once(self, dt: Optional[float], t: float) -> Solution:
@@ -418,13 +443,6 @@ class Solver:
                 i = info["g"] * u + info.get("ih", 0.0)
                 p = u * i
 
-            # Mise à jour de l'état transitoire (modèle compagnon)
-            if dt is not None:
-                if isinstance(comp, Capacitor):
-                    comp.tstate["v"] = u
-                elif isinstance(comp, Inductor):
-                    comp.tstate["i"] = i
-
             res = BranchResult(
                 u=u, i=i, p=p,
                 sourcing=(p < -1e-6) if isinstance(comp, Generator) else False,
@@ -497,9 +515,12 @@ class Solver:
             return False
 
         u_max = float(comp.get_prop("u_max") or 0.0)
+        limits = []
+        if u_max > 0:          # 0 = aucune limite de tension (comme p_max)
+            limits.append(u_max)
         if isinstance(comp, Lamp):
-            u_max = min(u_max, comp.u_rated)
-        if abs(res.u) > u_max:
+            limits.append(comp.u_rated)
+        if limits and abs(res.u) > min(limits):
             return True
         p_max = comp.get_prop("p_max")
         return (

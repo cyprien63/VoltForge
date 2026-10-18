@@ -11,12 +11,12 @@ import zipfile
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QPoint, QSize, Qt, QTimer
+from PyQt6.QtCore import QPoint, QSize, Qt
 from PyQt6.QtGui import QIcon, QImage, QKeySequence
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import (
-    QApplication, QPlainTextEdit, QPushButton, QMessageBox, QScrollArea,
-    QTableWidget, QToolBar, QStyle,
+    QApplication, QMessageBox, QScrollArea,
+    QToolBar, QStyle,
 )
 from PIL import Image, ImageChops
 
@@ -684,38 +684,40 @@ class CircuitEditorTests(unittest.TestCase):
         )
         self.assertIn("P = U×I", window.results_text.text())
 
-    def test_simulation_dialog_uses_parameter_form_not_script_editor(self) -> None:
+    def test_simulation_toolbar_runs_pause_and_stops_a_live_session(self) -> None:
         window = MainWindow()
         self.addCleanup(window.close)
-        window.circuit.add(Battery(0, 0, label="BAT_FORM"))
+        window.circuit.add(Battery(0, 0, label="BAT_SESSION"))
         window.engine.recompute()
-        observed = {}
+        self.assertFalse(window.engine.playing)
+        self.assertFalse(window.stop_action.isEnabled())
+        self.assertEqual(window.sim_duration.value(), 0.0)
+        self.assertTrue(window.sim_loop.isChecked())
 
-        def inspect_dialog() -> None:
-            dialog = next(
-                widget for widget in self.app.topLevelWidgets()
-                if widget.windowTitle() == "Simulation pas à pas"
-            )
-            observed["has_script_editor"] = bool(
-                dialog.findChildren(QPlainTextEdit)
-            )
-            table = dialog.findChild(QTableWidget)
-            observed["initial_rows"] = table.rowCount()
-            add_button = next(
-                button for button in dialog.findChildren(QPushButton)
-                if button.text() == "Ajouter un changement"
-            )
-            add_button.click()
-            observed["rows_after_add"] = table.rowCount()
-            dialog.accept()
+        window.play_action.trigger()
+        self.assertTrue(window.engine.playing)
+        self.assertTrue(window._play_timer.isActive())
+        self.assertTrue(window.stop_action.isEnabled())
+        self.assertEqual(window.play_action.text(), "Pause")
+        window._advance_playback()
+        self.assertAlmostEqual(window.engine.t, 0.02, places=6)
+        self.assertEqual(window.sim_time_label.text(), "t = 0,02 s")
 
-        QTimer.singleShot(20, inspect_dialog)
-        window.open_scenario_dialog()
-        self.assertFalse(observed["has_script_editor"])
-        self.assertEqual(observed["initial_rows"], 1)
-        self.assertEqual(observed["rows_after_add"], 2)
+        window.play_action.trigger()
+        self.assertTrue(window.engine.paused)
+        self.assertFalse(window._play_timer.isActive())
+        self.assertEqual(window.play_action.text(), "Reprendre")
 
-    def test_gif_captures_final_event_and_preserves_duration(self) -> None:
+        window.play_action.trigger()
+        self.assertTrue(window.engine.playing)
+        self.assertFalse(window.engine.paused)
+
+        window.stop_action.trigger()
+        self.assertFalse(window.engine.playing)
+        self.assertFalse(window._play_timer.isActive())
+        self.assertEqual(window.sim_time_label.text(), "t = 0,00 s")
+
+    def test_gif_records_live_session_and_keeps_user_edits(self) -> None:
         window = MainWindow()
         self.addCleanup(window.close)
         battery = window.circuit.add(Battery(-80, 0, rotation=90, label="BAT_GIF"))
@@ -726,15 +728,23 @@ class CircuitEditorTests(unittest.TestCase):
         window.resize(900, 650)
         window.show()
         self.app.processEvents()
-        scenario = (
-            "loop 0s 0.25s\nfps 5\ndt 1ms\n"
-            "t=0.2s: BAT_GIF.voltage=5V"
-        )
+
+        edited = {"done": False}
+
+        def interact(current, total) -> None:
+            # Simule l'utilisateur qui règle la tension pendant la capture.
+            if current == 1 and not edited["done"]:
+                edited["done"] = True
+                battery.set_prop("voltage", 5.0)
+                window.engine.recompute()
+
         with TemporaryDirectory() as temp:
-            path = Path(temp) / "scenario.gif"
-            count = export_gif(window.engine, window.canvas, scenario, str(path))
+            path = Path(temp) / "session.gif"
+            count = export_gif(
+                window.engine, window.canvas, str(path),
+                duration=0.25, fps=5.0, progress=interact,
+            )
             self.assertEqual(count, 2)
-            self.assertEqual(battery.voltage, 9.0)
             with Image.open(path) as image:
                 self.assertEqual(image.n_frames, 2)
                 image.seek(0)
@@ -745,6 +755,9 @@ class CircuitEditorTests(unittest.TestCase):
                 last = image.convert("RGB").copy()
             self.assertEqual(sum(durations), 250)
             self.assertIsNotNone(ImageChops.difference(first, last).getbbox())
+        # Session terminée, et le réglage fait pendant l'enregistrement reste.
+        self.assertFalse(window.engine.playing)
+        self.assertEqual(battery.get_prop("voltage"), 5.0)
 
     def test_led_and_lamp_calculate_illuminated_states(self) -> None:
         circuit = Circuit()
@@ -804,25 +817,23 @@ class CircuitEditorTests(unittest.TestCase):
         self.assertTrue(resistor.get_prop("blown"))
         self.assertEqual(solution.branches[resistor.label].state, "blown")
 
-    def test_components_burned_during_transient_remain_burned(self) -> None:
+    def test_components_burned_during_session_remain_burned(self) -> None:
         circuit = Circuit()
         battery = circuit.add(Battery(-40, 0, voltage=9, ri=0.1,
-                                     label="BAT_TRANSIENT"))
-        lamp = circuit.add(Lamp(40, 0, resistance=50, u_rated=5, p_max=10))
+                                     label="BAT_SESSION"))
+        lamp = circuit.add(Lamp(40, 0, resistance=50, u_rated=12, p_max=10))
         circuit.add_wire([(-60, 0), (-60, -40), (20, -40), (20, 0)])
         circuit.add_wire([(-20, 0), (-20, 40), (60, 40), (60, 0)])
         engine = SimulationEngine(circuit)
-        program = engine.load_program(
-            "loop 0s 0.1s\nfps 10\ndt 10ms\n"
-            "t=0s: BAT_TRANSIENT.voltage=220V"
-        )
+        engine.start_play(duration=0.1, loop=False)
 
-        engine.begin_transient(program)
+        battery.set_prop("voltage", 220.0)
+        engine.recompute()
         self.assertTrue(lamp.get_prop("blown"))
         engine.advance(0.1)
-        engine.end_transient()
+        engine.stop_play()
 
-        self.assertEqual(battery.voltage, 9)
+        self.assertEqual(battery.get_prop("voltage"), 220.0)
         self.assertTrue(lamp.get_prop("blown"))
         self.assertTrue(battery.get_prop("blown"))
 

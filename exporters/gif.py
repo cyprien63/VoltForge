@@ -1,8 +1,10 @@
-"""Sequential scenario capture to animated GIF."""
+"""Capture d'une session de lecture en GIF animé."""
 
 from __future__ import annotations
 
 from io import BytesIO
+from math import ceil
+from typing import Callable, List, Optional, Sequence
 
 from PIL import Image
 from PyQt6.QtCore import QBuffer, QByteArray, QIODevice
@@ -10,66 +12,71 @@ from PyQt6.QtCore import QBuffer, QByteArray, QIODevice
 from .static import render_image
 
 
-def export_gif(engine, canvas, scenario_text: str, filename: str,
-               progress=None) -> int:
-    """Simulate and capture every frame through the complete scenario."""
-    program = engine.load_program(scenario_text)
-    if engine.program_errors:
-        raise ValueError("\n".join(engine.program_errors))
-    if program.duration <= 0 or program.frame_count <= 0:
-        raise ValueError("Le scénario doit définir une durée positive.")
+def capture_frame(canvas) -> Image.Image:
+    """Rendu PNG du canevas, converti en image RGB indépendante."""
+    encoded = QByteArray()
+    buffer = QBuffer(encoded)
+    buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+    if not render_image(canvas).save(buffer, "PNG"):
+        raise OSError("Impossible de capturer une image du canevas.")
+    buffer.close()
+    with Image.open(BytesIO(bytes(encoded))) as image:
+        return image.convert("RGB").copy()
 
-    frames = []
-    engine.begin_transient(program, restore_after=True)
+
+def save_gif(frames: Sequence[Image.Image], durations_ms: Sequence[int],
+             filename: str) -> None:
+    """Écrit ``frames`` en GIF animé avec les durées d'image indiquées."""
+    frames[0].save(
+        filename,
+        format="GIF",
+        save_all=True,
+        append_images=list(frames[1:]),
+        duration=list(durations_ms),
+        loop=0,
+        optimize=False,
+        disposal=2,
+    )
+
+
+def export_gif(engine, canvas, filename: str, duration: float = 3.0,
+               fps: float = 15.0,
+               progress: Optional[Callable[[int, int], None]] = None) -> int:
+    """Enregistre ``duration`` secondes de session à ``fps`` images par seconde.
+
+    L'export pilote le moteur lui-même : ``engine.start_play()`` démarre
+    une session fraîche, chaque image est rendue à intervalle ``1/fps``
+    d'horloge simulée, puis ``engine.stop_play()`` termine la session dans
+    un bloc ``finally``. Le rappel ``progress`` est invoqué après chaque
+    image ; s'il traite les événements Qt, l'utilisateur peut interagir
+    avec le canevas pendant la capture et ses gestes sont enregistrés.
+    """
+    if duration <= 0.0:
+        raise ValueError("La durée doit être positive.")
+    if fps <= 0.0:
+        raise ValueError("La cadence d'images doit être positive.")
+    frame_step = 1.0 / fps
+    frame_count = max(2, ceil(duration * fps - 1e-9))
+
+    frames: List[Image.Image] = []
+    engine.start_play(duration=0.0, loop=False)
     try:
-        frame_count = program.frame_count
-        frame_step = 1.0 / program.fps
-        if program.duration <= frame_step:
-            frame_times = [program.start, program.end]
-            frame_durations = [program.duration / 2] * 2
-        else:
-            frame_times = [
-                program.start + index * frame_step
-                for index in range(frame_count - 1)
-            ] + [program.end]
-            frame_durations = (
-                [frame_step] * (frame_count - 1)
-                + [program.duration - (frame_count - 1) * frame_step]
-            )
-
-        for index, frame_time in enumerate(frame_times):
+        for index in range(frame_count):
             if index:
-                engine.advance(max(0.0, frame_time - engine.t))
-            encoded = QByteArray()
-            buffer = QBuffer(encoded)
-            buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-            if not render_image(canvas).save(buffer, "PNG"):
-                raise OSError("Impossible de capturer une image du canevas.")
-            buffer.close()
-            with Image.open(BytesIO(bytes(encoded))) as image:
-                frames.append(image.convert("RGB").copy())
+                engine.advance(frame_step)
+            frames.append(capture_frame(canvas))
             if progress is not None:
-                progress(index + 1, len(frame_times))
-        if engine.missing_targets:
-            raise ValueError(
-                "Composants absents du circuit : " + ", ".join(engine.missing_targets)
-            )
-        durations_ms = [
-            max(10, round(duration * 100) * 10)
-            for duration in frame_durations
-        ]
-        frames[0].save(
-            filename,
-            format="GIF",
-            save_all=True,
-            append_images=frames[1:],
-            duration=durations_ms,
-            loop=0,
-            optimize=False,
-            disposal=2,
-        )
-        return len(frames)
+                progress(index + 1, frame_count)
     finally:
-        engine.end_transient(restore=True)
+        engine.stop_play()
+
+    total_ms = round(duration * 1000)
+    step_ms = max(10, round(frame_step * 1000))
+    durations_ms = [step_ms] * (frame_count - 1)
+    durations_ms.append(max(10, total_ms - step_ms * (frame_count - 1)))
+    try:
+        save_gif(frames, durations_ms, filename)
+    finally:
         for frame in frames:
             frame.close()
+    return frame_count

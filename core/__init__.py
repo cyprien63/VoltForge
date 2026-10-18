@@ -1,4 +1,4 @@
-"""VoltForge — cœur métier (modèle, topologie, solveur, scénarios).
+"""VoltForge — cœur métier (modèle, topologie, solveur, simulation).
 
 Aucun import Qt : ce paquet est testable en headless via
 ``python -m core``.
@@ -37,12 +37,6 @@ from .components import (
     create_component,
     snap,
 )
-from .scenario import (
-    ScenarioError,
-    ScenarioEvent,
-    ScenarioProgram,
-    parse_scenario,
-)
 from .simulation import SimulationEngine
 from .solver import BranchResult, Solution, Solver
 from .voltage_arrow import VoltageArrow
@@ -56,6 +50,5 @@ __all__ = [
     "Inductor", "Diode", "Led", "Lamp", "Motor", "Fuse",
     "Voltmeter", "Ammeter", "Ohmmeter", "Ground",
     "Solver", "Solution", "BranchResult",
-    "ScenarioProgram", "ScenarioEvent", "ScenarioError", "parse_scenario",
     "SimulationEngine", "VoltageArrow",
 ]

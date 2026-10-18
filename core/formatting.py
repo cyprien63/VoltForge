@@ -1,7 +1,7 @@
 """VoltForge — Formatage et analyse de grandeurs physiques (SI).
 
-Petites utilitaires utilisées par le modèle de composants, le solveur MNA
-et le parseur de scénarios : conversion « 4.7k » -> 4700.0, affichage
+Petites utilitaires utilisées par le modèle de composants et le solveur MNA :
+conversion « 4.7k » -> 4700.0, affichage
 élégant « 4.7 kΩ », gestion des préfixes SI et des unités usuelles.
 """
 

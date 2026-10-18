@@ -1,24 +1,28 @@
-"""VoltForge — Orchestration de la simulation.
+"""VoltForge — Session de simulation interactive.
 
-``SimulationEngine`` fait le lien entre le circuit, le solveur MNA et un
-programme séquentiel :
+``SimulationEngine`` fait le lien entre le circuit et le solveur MNA :
 
 * **Mode DC** (par défaut) : ``recompute()`` résout le circuit à chaque
   modification de valeur -> mise à jour *instantanée* des tensions et
   courants dans l'interface.
-* **Mode transitoire** : ``begin_transient()`` / ``advance(dt)`` rejouent
-  un scénario pas à pas (modèles compagnons), pour la lecture en temps
-  réel **et** l'enregistrement GIF.
+* **Session de lecture** : ``start_play()`` démarre une passe transitoire
+  en temps réel, ``advance(dt)`` avance l'horloge, ``pause_play()`` la
+  fige et ``stop_play()`` la termine. Pendant la lecture, l'utilisateur
+  reste libre d'interagir : basculer un interrupteur ou régler un curseur
+  puis ``recompute()`` applique le changement immédiatement, sans perdre
+  la session et sans qu'aucune valeur ne soit restaurée en secret — les
+  réglages faits en cours de route restent en place après l'arrêt.
+  Une durée finie avec ``loop=True`` reboucle sans jamais s'arrêter
+  (boucle à la Scratch) ; ``duration=0`` signifie « jusqu'à l'arrêt ».
 
 Indépendant de Qt.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Tuple
 
 from .circuit import Circuit
-from .scenario import ScenarioError, ScenarioProgram, parse_scenario
 from .solver import Solution, Solver
 
 
@@ -29,151 +33,124 @@ class SimulationEngine:
         self.circuit = circuit
         self.solver = Solver(circuit)
         self.solution: Solution = Solution()
-        # --- mode transitoire ---
-        self.program: Optional[ScenarioProgram] = None
-        self.program_errors: List[str] = []
         self.playing: bool = False
+        self.paused: bool = False
         self.t: float = 0.0
-        self._cursor: int = 0
-        self._snapshot: Dict[str, Dict[str, Any]] = {}
-        self._missing: List[str] = []
+        self.duration: float = 0.0    # 0 s = session illimitée
+        self.loop: bool = True
+        self.step: float = 0.005      # pas de calcul interne (s)
 
     # ------------------------------------------------------------------
-    # Mode permanent (DC) — utilisé à chaque édition dans l'interface
+    # Résolution — édition en DC et rafraîchissement pendant la lecture
     # ------------------------------------------------------------------
     def recompute(self) -> Solution:
-        """Résout le circuit en régime permanent et stocke la solution."""
-        if self.playing:
-            # Pendant la lecture d'un scénario, le résultat transitoire prime.
+        """Résout le circuit sans jamais perdre l'état de la session.
+
+        En DC, la résolution est permanente. Pendant la lecture, elle
+        utilise les modèles compagnons de l'instant courant mais n'avance
+        pas l'horloge : l'édition de l'utilisateur s'applique tout de
+        suite et l'état dynamique (charge du condensateur, courant de la
+        bobine) est conservé à l'identique. Un composant qui grille reste
+        grillé, y compris pendant puis après la session.
+        """
+        if not self.playing:
+            self.solution = self.solver.solve(dt=None, t=self.t)
             return self.solution
-        self.solution = self.solver.solve(dt=None, t=self.t)
+        states = self._dynamic_states()
+        self.solution = self.solver.solve(dt=self.step, t=self.t)
+        self._restore_dynamic_states(states)
         return self.solution
 
     # ------------------------------------------------------------------
-    # Mode transitoire (lecture de scénario / export GIF)
+    # Session de lecture
     # ------------------------------------------------------------------
-    @property
-    def is_transient(self) -> bool:
-        return self.playing
+    def start_play(self, duration: float = 0.0, loop: bool = True) -> Solution:
+        """Démarre une session transitoire depuis les valeurs actuelles.
 
-    def load_program(self, text: str) -> ScenarioProgram:
-        """Analyse un scénario textuel et mémorise les erreurs éventuelles."""
-        program, errors = parse_scenario(text)
-        self.program = program
-        self.program_errors = [
-            f"Ligne {e.line} : {e.message}" for e in errors
-        ] + [str(e) for e in errors if isinstance(e, ScenarioError)]
-        # dédoublonnage simple
-        seen, uniq = set(), []
-        for msg in self.program_errors:
-            if msg not in seen:
-                seen.add(msg)
-                uniq.append(msg)
-        self.program_errors = uniq
-        return program
-
-    def begin_transient(self, program: Optional[ScenarioProgram] = None,
-                        restore_after: bool = True) -> Solution:
-        """Démarre une simulation transitoire (snapshot des propriétés)."""
-        prog = program or self.program
-        if prog is None:
-            raise RuntimeError("Aucun programme de simulation chargé.")
-        if restore_after:
-            self._snapshot = {
-                c.label: {k: v for k, v in c.props().items()}
-                for c in self.circuit.components
-            }
-        else:
-            self._snapshot = {}
-        self._missing = []
-        self.program = prog
-        self.playing = True
-        self.t = prog.start
-        self._cursor = 0
+        Les grandeurs d'état repartent de leurs conditions initiales
+        (``v0`` du condensateur, bobine à vide) ; les propriétés du
+        circuit telles que l'utilisateur les a réglées sont conservées.
+        """
+        self.duration = max(0.0, float(duration))
+        self.loop = bool(loop)
         self.solver.reset_transient()
-        # Applique les événements déjà dus à l'instant initial (t0)
-        by_label = {c.label.lower(): c for c in self.circuit.components}
-        self._cursor = prog.apply_upto(by_label, self.t, self._cursor, self._missing)
-        # Re résout les nœuds (les bornes ne bougent pas, mais la masse
-        # peut changer si on a modifié un label — on garde la topologie)
-        self.solution = self.solver.solve(dt=prog.dt, t=self.t)
-        return self.solution
-
-    def advance(self, dt: float) -> Solution:
-        """Avance la simulation de ``dt`` secondes (pas à pas internes)."""
-        if not self.playing or self.program is None:
-            return self.solution
-        prog = self.program
-        target = min(self.t + dt, prog.end)
-        by_label = {c.label.lower(): c for c in self.circuit.components}
-        while self.t < target - 1e-9:
-            next_event_t = self._next_event_time()
-            step = min(prog.dt, target - self.t)
-            if next_event_t is not None:
-                step = min(step, max(0.0, next_event_t - self.t))
-            if step <= 1e-12:
-                # événements dus : application puis reprise
-                self._cursor = prog.apply_upto(by_label, self.t, self._cursor,
-                                               self._missing)
-                continue
-            self.t += step
-            self._cursor = prog.apply_upto(by_label, self.t, self._cursor,
-                                           self._missing)
-            self.solution = self.solver.solve(dt=step, t=self.t)
-        if self.t >= prog.end - 1e-9:
-            self.playing = False    # programme terminé
-        return self.solution
-
-    def _next_event_time(self) -> Optional[float]:
-        assert self.program is not None
-        if self._cursor < len(self.program.events):
-            return self.program.events[self._cursor].time
-        return None
-
-    @property
-    def finished(self) -> bool:
-        return self.program is not None and not self.playing
-
-    def end_transient(self, restore: bool = True) -> Solution:
-        """Termine la lecture ; restaure les propriétés d'origine si demandé."""
-        self.playing = False
-        if restore and self._snapshot:
-            self.restore_snapshot()
-        self._snapshot = {}
         self.t = 0.0
-        self._cursor = 0
+        self.playing = True
+        self.paused = False
+        self.solution = self.solver.solve(dt=self.step, t=0.0)
+        return self.solution
+
+    def pause_play(self) -> None:
+        """Figge l'horloge de la session (la reprise reprend au même point)."""
+        self.paused = True
+
+    def resume_play(self) -> None:
+        self.paused = False
+
+    def stop_play(self) -> Solution:
+        """Termine la session et repasse en régime permanent.
+
+        Les valeurs réglées pendant la lecture sont conservées : il n'y
+        a pas de restauration cachée, la session modifie le circuit.
+        """
+        self.playing = False
+        self.paused = False
+        self.t = 0.0
         self.solution = self.solver.solve(dt=None, t=0.0)
         return self.solution
 
-    def restore_snapshot(self) -> None:
-        """Remet les valeurs d'origine (annule les mutations du scénario)."""
-        for comp in self.circuit.components:
-            saved = self._snapshot.get(comp.label)
-            if not saved:
-                continue
-            burned_during_simulation = bool(comp.get_prop("blown"))
-            for k, v in saved.items():
-                if k == "blown":
+    def advance(self, dt: float) -> Solution:
+        """Avance la session de ``dt`` secondes (pas à pas internes).
+
+        Si une durée finie est atteinte : reboucle à t = 0 quand
+        ``loop=True``, sinon termine la session en conservant l'horloge.
+        """
+        if not self.playing or self.paused or dt <= 0.0:
+            return self.solution
+        remaining = float(dt)
+        while remaining > 1e-12 and self.playing:
+            step = min(self.step, remaining)
+            if self.duration > 0.0:
+                until_end = self.duration - self.t
+                if until_end <= 1e-12:
+                    self._cycle_or_finish()
                     continue
-                try:
-                    comp.set_prop(k, v)
-                except (ValueError, KeyError):
-                    pass
-            comp.set_prop(
-                "blown",
-                burned_during_simulation or bool(saved.get("blown", False)),
-            )
+                step = min(step, until_end)
+            self.t += step
+            remaining -= step
+            self.solution = self.solver.solve(dt=step, t=self.t)
+            if self.duration > 0.0 and self.t >= self.duration - 1e-9:
+                self._cycle_or_finish()
+        return self.solution
+
+    def _cycle_or_finish(self) -> None:
+        """Reboucle la session à t = 0, ou l'arrête à durée épuisée."""
+        if self.loop:
+            self.solver.reset_transient()
+            self.t = 0.0
+            self.solution = self.solver.solve(dt=self.step, t=0.0)
+        else:
+            # Fin naturelle : la solution transitoire du dernier instant
+            # reste affichée (frame finale de la session) jusqu'à la
+            # prochaine édition, à un nouveau lancement ou à l'arrêt
+            # explicite, qui repassent en régime permanent.
+            self.playing = False
+            self.paused = False
 
     # ------------------------------------------------------------------
-    # Utilitaires
+    # État dynamique (conservé par recompute pendant la lecture)
     # ------------------------------------------------------------------
-    @property
-    def missing_targets(self) -> List[str]:
-        """Composants référencés par le scénario mais absents du circuit."""
-        return list(dict.fromkeys(self._missing))
+    def _dynamic_states(self) -> List[Tuple[Any, Dict[str, Any]]]:
+        return [(comp, dict(comp.tstate)) for comp in self.circuit.components]
 
-    def measure(self, label: str) -> Optional[Dict[str, float]]:
-        r = self.solution.branches.get(label)
-        if r is None:
-            return None
-        return {"u": r.u, "i": r.i, "p": r.p}
+    @staticmethod
+    def _restore_dynamic_states(
+        states: List[Tuple[Any, Dict[str, Any]]]
+    ) -> None:
+        # Seules les grandeurs d'état sont rétablies : l'hystérésis des
+        # diodes/LED (« on ») et les composants grillés restent ceux que
+        # la résolution vient de déterminer avec les nouvelles valeurs.
+        for comp, saved in states:
+            for key in ("v", "i"):
+                if key in saved:
+                    comp.tstate[key] = saved[key]

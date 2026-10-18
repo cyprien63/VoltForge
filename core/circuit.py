@@ -463,7 +463,7 @@ class Circuit:
         return meshes
 
     # -- sérialisation -----------------------------------------------------
-    def to_dict(self, scenario_text: str = "") -> Dict[str, Any]:
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "version": 1,
             "components": [component_to_dict(c) for c in self.components],
@@ -473,7 +473,6 @@ class Circuit:
                 {"point": list(point), "name": name}
                 for point, name in self.node_name_overrides.items()
             ],
-            "scenario": scenario_text,
         }
 
     @classmethod

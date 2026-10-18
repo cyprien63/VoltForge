@@ -2,7 +2,7 @@
 
 VoltForge est une application de bureau Python/PyQt6 pour dessiner des circuits
 électriques, résoudre leur comportement par analyse nodale modifiée (MNA) et
-exporter des schémas statiques ou des animations de scénarios.
+exporter des schémas statiques ou des animations GIF de sessions de simulation.
 
 ## Fonctionnalités
 
@@ -25,8 +25,8 @@ exporter des schémas statiques ou des animations de scénarios.
   grillés en cas de surcharge et fusibles déclenchés.
 - Sélection rectangulaire et déplacement/suppression groupés, déplacement du
   plan de travail, thèmes clair et sombre.
-- Projets `.voltforge` réouvrables, export PNG/JPEG/SVG/PDF et GIF animé à
-  partir d'une séquence de paramètres configurée dans l'interface.
+- Projets `.voltforge` réouvrables, export PNG/JPEG/SVG/PDF et GIF animé
+  capturé en direct pendant une session de lecture.
 
 ## Installation
 
@@ -79,16 +79,24 @@ Les propriétés de chaque composant exposent sa tension maximale et son état
 « grillé » ; les lampes utilisent aussi leur tension nominale. Une surcharge
 grille le composant durablement : sélectionnez-le puis utilisez **Réparer le
 composant** dans l'inspecteur. Un court-circuit de générateur ou de pile le
-grille également. Un composant qui grille pendant une simulation reste grillé
-après la restauration des paramètres du scénario. Le compteur de nœuds et de
+grille également. Un composant qui grille pendant une session de lecture reste
+grillé après l'arrêt, et les valeurs réglées pendant la lecture sont
+conservées. Le compteur de nœuds et de
 mailles reste visible sur le canevas ; activez les repères de nœuds pour voir
 leurs noms sur le circuit.
 Le menu **Affichage > Thème** bascule entre les thèmes clair et sombre.
 
-Le menu **Simulation > Configurer / lancer** permet de choisir une durée, la
-cadence d'images et le pas de calcul, puis d'ajouter des changements de
-paramètres horodatés avec des formulaires. Le même réglage sert à lancer la
-simulation ou à exporter un GIF, sans écrire de scénario. Le **Calculateur loi
+La barre **Simulation** pilote la lecture en direct, à la manière de Scratch :
+**Lecture** démarre une session transitoire (bouton **Pause** / **Reprendre**,
+**Arrêt** termine), avec une durée au choix (« illimitée » par défaut) et un
+option **Boucler** qui repart de zéro à chaque fin de session. Pendant la
+lecture, l'interface reste pleinement interactive : basculez un interrupteur
+(double-clic ou le bouton de l'inspecteur), réglez les curseurs **Réglage en
+direct** ou changez une tension — tout s'applique immédiatement, l'horloge ne
+s'arrête pas et rien n'est restauré en secret à l'arrêt. Le bouton
+**Enregistrer GIF…** capture une session (durée et cadence au choix) image par
+image : pendant l'enregistrement, vos gestes sont inclus dans l'animation. Le
+**Calculateur loi
 d'Ohm** déduit U, I, R et P à partir de deux valeurs saisies.
 L'outil **Calculer une résistance de protection** estime une résistance série
 normalisée et sa puissance minimale à partir des caractéristiques de la source
@@ -123,8 +131,8 @@ du dépôt.
 
 ## Architecture
 
-- `core/` : modèles électriques, topologie, parseur de scénario et solveur MNA,
-  indépendants de Qt.
+- `core/` : modèles électriques, topologie, sessions de simulation et
+  solveur MNA, indépendants de Qt.
 - `ui/` : fenêtre principale, canevas, édition et orchestration interactive.
 - `exporters/` : export de canevas statique et génération GIF.
 - `skills/` : notes de référence pour les extensions du solveur et des exports.
