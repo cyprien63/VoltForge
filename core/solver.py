@@ -515,9 +515,12 @@ class Solver:
             return False
 
         u_max = float(comp.get_prop("u_max") or 0.0)
+        limits = []
+        if u_max > 0:          # 0 = aucune limite de tension (comme p_max)
+            limits.append(u_max)
         if isinstance(comp, Lamp):
-            u_max = min(u_max, comp.u_rated)
-        if abs(res.u) > u_max:
+            limits.append(comp.u_rated)
+        if limits and abs(res.u) > min(limits):
             return True
         p_max = comp.get_prop("p_max")
         return (
