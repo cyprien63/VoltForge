@@ -11,7 +11,9 @@ programme séquentiel :
   réel **et** l'enregistrement GIF. Les propriétés d'origine sont
   mémorisées à l'identité (labels compris) : relancer une lecture
   repart toujours des mêmes valeurs de départ, éventuellement renommées
-  en cours de route, sans jamais écraser une valeur grillée.
+  en cours de route, sans jamais écraser une valeur grillée. Une édition
+  manuelle du circuit (``recompute()``) invalide ce point de départ :
+  les réglages de l'utilisateur ne sont pas écrasés au lancement.
 
 Indépendant de Qt.
 """
@@ -45,12 +47,28 @@ class SimulationEngine:
     # Mode permanent (DC) — utilisé à chaque édition dans l'interface
     # ------------------------------------------------------------------
     def recompute(self) -> Solution:
-        """Résout le circuit en régime permanent et stocke la solution."""
+        """Résout le circuit en régime permanent et stocke la solution.
+
+        Un recalcul explicite signale une édition du circuit par
+        l'utilisateur : le snapshot d'une lecture précédente devient
+        obsolète et est oublié, sinon la prochaine lecture écraserait
+        ces réglages par les anciennes valeurs de départ.
+        """
         if self.playing:
             # Pendant la lecture d'un scénario, le résultat transitoire prime.
             return self.solution
+        if self._snapshot:
+            self.discard_snapshot()
         self.solution = self.solver.solve(dt=None, t=self.t)
         return self.solution
+
+    def discard_snapshot(self) -> None:
+        """Oublie le point de départ mémorisé sans toucher au circuit.
+
+        À utiliser quand l'utilisateur paramètre un composant : la
+        prochaine lecture repartira de ces nouvelles valeurs.
+        """
+        self._snapshot = []
 
     # ------------------------------------------------------------------
     # Mode transitoire (lecture de scénario / export GIF)
