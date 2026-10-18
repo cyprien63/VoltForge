@@ -9,7 +9,7 @@ import math
 import unittest
 
 from core.circuit import Circuit
-from core.components import Kind, create_component
+from core.components import Kind, Voltmeter, create_component
 from core.scenario import parse_scenario
 from core.simulation import SimulationEngine
 
@@ -103,6 +103,55 @@ class ScenarioParserTests(unittest.TestCase):
         self.assertIn("propriété inconnue", messages)
         self.assertIn("temps invalide", messages)
         self.assertTrue(all(e.line > 0 for e in errors))
+
+    def test_aliases_cover_adjustable_components(self) -> None:
+        program, errors = parse_scenario(
+            "t=0: P1.level=0.25\n"
+            "t=1: NTC1.temperature=40\n"
+            "t=2: D1.vf=0.6\n"
+            "t=3: F1.i_rated=2\n"
+            "t=4: LDR1.illumination=500\n"
+            "t=5: M1.ke=0.05"
+        )
+        self.assertFalse(errors)
+        self.assertEqual([ev.prop for ev in program.events],
+                         ["level", "temperature", "vf", "i_rated",
+                          "illumination", "ke"])
+
+    def test_numeric_boolean_syntax_matches_documentation(self) -> None:
+        program, errors = parse_scenario(
+            "t=0: K1.closed=1\nt=1: K1.closed=0")
+        self.assertFalse(errors)
+        self.assertIs(program.events[0].prop, "closed")
+        # « 1 »/« 0 » sont numériques dans le DSL : la coerction en booléen
+        # doit les accepter (bug : « booléen attendu, reçu 1.0 »).
+        self.assertEqual(program.events[0].value, 1.0)
+
+
+class ComponentPropCoercionTests(unittest.TestCase):
+    def test_boolean_prop_accepts_numeric_one_and_zero(self) -> None:
+        switch = create_component(Kind.SWITCH, 0, 0, label="K1", closed=False)
+        switch.set_prop("closed", 1)
+        self.assertTrue(switch.closed)
+        switch.set_prop("closed", 0.0)
+        self.assertFalse(switch.closed)
+        switch.set_prop("closed", "1.0")
+        self.assertTrue(switch.closed)
+
+    def test_raw_property_falls_back_when_alias_targets_another_name(self) -> None:
+        # « r_int » est un alias de « ri » (générateur) mais le voltmètre
+        # déclare littéralement « r_int » : la résolution doit retomber sur
+        # le nom réel du composant.
+        voltmeter = Voltmeter(0, 0, label="V1")
+        program, errors = parse_scenario("t=0: V1.r_int=2e6")
+        self.assertFalse(errors)
+
+        class Holder:
+            def get(self, label):
+                return voltmeter if label.lower() == "v1" else None
+
+        program.apply_upto(Holder(), 0.0, 0)
+        self.assertEqual(voltmeter.r_int, 2e6)
 
 
 class TransientEngineTests(unittest.TestCase):
@@ -241,6 +290,61 @@ class TransientEngineTests(unittest.TestCase):
         engine.end_transient(restore=True)
         self.assertEqual(gen.voltage, 12.0)
         self.assertFalse(engine.snapshot_pending)
+
+    def test_numeric_boolean_event_closes_switch(self) -> None:
+        circuit, (_gen, switch, _resistor) = series_circuit([
+            (Kind.GENERATOR, dict(label="G1", voltage=12.0, ri=0.01, p_max=100.0)),
+            (Kind.SWITCH, dict(label="K1", closed=False, p_max=50.0)),
+            (Kind.RESISTOR, dict(label="R1", resistance=100.0, p_max=50.0)),
+        ])
+        engine = SimulationEngine(circuit)
+        engine.load_program("loop 0s 1s\ndt 5ms\nt=0: K1.closed=1")
+        self.assertFalse(engine.program_errors)
+
+        engine.begin_transient()
+        self.assertTrue(switch.closed)
+        self.assertAlmostEqual(engine.solution.branch("R1").i, 0.12, delta=0.01)
+
+    def test_manual_edit_discards_stale_snapshot_on_relaunch(self) -> None:
+        circuit, (gen, _switch, _resistor) = series_circuit([
+            (Kind.GENERATOR, dict(label="G1", voltage=12.0, ri=0.01, p_max=100.0)),
+            (Kind.SWITCH, dict(label="K1", closed=True, p_max=50.0)),
+            (Kind.RESISTOR, dict(label="R1", resistance=100.0, p_max=50.0)),
+        ])
+        engine = SimulationEngine(circuit)
+        engine.load_program("loop 0s 0.5s\ndt 5ms\nt=0.3: G1.voltage=3V")
+
+        engine.begin_transient()
+        while not engine.finished:
+            engine.advance(0.05)
+        engine.end_transient(restore=False)
+        self.assertEqual(gen.voltage, 3.0)
+        self.assertTrue(engine.snapshot_pending)
+
+        # L'utilisateur paramètre ensuite un composant dans le panneau :
+        # le point de départ mémorisé ne doit plus écraser ce réglage.
+        gen.set_prop("voltage", 24.0)
+        engine.recompute()
+        self.assertFalse(engine.snapshot_pending)
+
+        engine.begin_transient()
+        self.assertEqual(gen.voltage, 24.0)
+        engine.advance(0.4)
+        self.assertEqual(gen.voltage, 3.0)
+        engine.end_transient(restore=True)
+        self.assertEqual(gen.voltage, 24.0)
+
+    def test_zero_u_max_disables_voltage_limit(self) -> None:
+        circuit, (_gen, resistor) = series_circuit([
+            (Kind.GENERATOR, dict(label="G1", voltage=220.0, ri=0.1, p_max=1000.0)),
+            (Kind.RESISTOR, dict(label="R1", resistance=1000.0, p_max=1000.0)),
+        ])
+        resistor.set_prop("u_max", 0.0)
+        engine = SimulationEngine(circuit)
+        solution = engine.recompute()
+        self.assertFalse(resistor.get_prop("blown"))
+        self.assertAlmostEqual(solution.branch("R1").u, 220.0 * 1000.0 / 1000.1,
+                               delta=1.0)
 
 
 if __name__ == "__main__":
