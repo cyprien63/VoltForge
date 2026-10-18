@@ -44,8 +44,9 @@
   **Réparer le composant** dans l'inspecteur.
 - [x] Calcul et mise en évidence des mailles indépendantes, activables avec
   l'affichage des nœuds depuis le menu **Affichage**.
-- [x] Simulation utilisateur sans saisie de code : formulaire de durée,
-  cadence, pas de calcul et liste d'événements paramétrés.
+- [x] Simulation utilisateur directe (style Scratch) : lecture, pause, arrêt,
+  durée illimitée ou finie avec bouclage, et interactions en cours de lecture
+  (interrupteurs, curseurs, tensions) appliquées immédiatement.
 - [x] Calculateur de loi d'Ohm pour déterminer U, I, R et P depuis deux valeurs.
 - [x] Calcul de résistance série de protection, normalisation E12 et puissance
   minimale conseillée pour préserver le récepteur.
@@ -56,8 +57,9 @@
   au-dessus des composants lorsqu'ils sont activés.
 - [x] Sauvegarde au format de projet `.voltforge`, import des anciens JSON et
   confirmation avant fermeture en présence de modifications non enregistrées.
-- [x] Export GIF jusqu'au dernier événement du scénario, avec durée totale
-  calculée depuis le programme, et restauration de l'état du circuit.
+- [x] Export GIF image par image d'une session de lecture, durée et cadence au
+  choix, avec capture des interactions faites pendant l'enregistrement et
+  conservation des réglages à l'arrêt.
 - [x] Tests de régression pour la palette, les symboles, les mouvements, les
   jonctions, la simulation des lampes/LED et l'export GIF.
 

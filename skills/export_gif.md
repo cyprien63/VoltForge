@@ -1,15 +1,16 @@
 # Export GIF
 
-L'interface recueille la durée, la cadence, le pas de calcul et les changements
-de paramètres avec des champs et des listes, sans exposer le langage de
-scénario. Elle convertit ces réglages en événements que `parse_scenario()`
-analyse avant le démarrage de `SimulationEngine.begin_transient()`. L'export
-avance d'un pas de simulation par intervalle d'image. Chaque image est rendue
-depuis le même canevas que l'export statique afin de préserver couleurs,
-mesures et états.
+`export_gif(engine, canvas, filename, duration, fps, progress)` enregistre une
+session de lecture : `start_play()` démarre une session fraîche, puis chaque
+image est capturée à intervalle `1/fps` d'horloge simulée et `stop_play()`
+termine la session dans un bloc `finally`, y compris quand le rendu ou
+l'écriture du fichier échoue. Le nombre d'images est `ceil(duration * fps)`
+(au moins 2) ; les durées d'image somment à la durée demandée.
 
-La capture va jusqu'à `ScenarioProgram.end`; le nombre d'images et la durée
-sont déterminés par `fps`, `loop`, les événements et `tail`. Restaurer les
-valeurs originales dans un bloc `finally`, y compris quand le rendu ou
-l'écriture du fichier échoue. Les erreurs de syntaxe doivent être présentées
-à l'utilisateur avant le démarrage.
+Chaque image est rendue depuis le même canevas que l'export statique afin de
+préserver couleurs, mesures et états. Le rappel `progress(current, total)` est
+invoqué après chaque image : s'il traite les événements Qt, l'utilisateur peut
+interagir avec le canevas pendant la capture — interrupteurs et curseurs sont
+alors enregistrés dans le GIF. L'interface doit désactiver les commandes de
+session pendant l'export pour que le timer de lecture ne pilote pas le moteur
+en parallèle.

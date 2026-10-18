@@ -7,9 +7,14 @@ En DC, les condensateurs sont ouverts et les inductances sont remplacées par
 leur résistance de fil. En transitoire, C et L utilisent Euler implicite.
 
 Convention des résultats : `u = V(p)-V(n)`, `i` circule de p vers n et
-`p = u*i`. Le parseur de `core/scenario.py` fournit des événements horodatés
-au moteur `SimulationEngine`. Conserver les mutations d'événements typées via
-`Component.set_prop()` et tester les nouveaux composants en DC et transitoire.
+`p = u*i`. `SimulationEngine` gère une session interactive (style Scratch) :
+`start_play(duration, loop)` démarre la lecture, `advance(dt)` avance
+l'horloge, `pause_play()`/`resume_play()` et `stop_play()` la contrôlent.
+Pendant la session, `recompute()` réapplique immédiatement les interactions
+de l'utilisateur (interrupteurs, curseurs, tension) sans avancer l'horloge et
+en conservant l'état dynamique ; les valeurs réglées en lecture restent en
+place après l'arrêt. Conserver les mutations typées via
+`Component.set_prop()` et tester les nouveaux composants en DC et en session.
 
 Ajouter des composants dans `core/components.py`, compléter leur estampillage
 dans `core/solver.py`, et vérifier sérialisation, affichage et édition des
